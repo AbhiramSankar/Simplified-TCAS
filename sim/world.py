@@ -4,6 +4,7 @@ from tcas.advisory import AdvisoryLogic, apply_command
 from tcas.sensing import Sensing
 from tcas.tracking import Tracking
 
+# simulation/world.py (modified parts)
 class World:
     def __init__(self, aircraft: Dict[str, Aircraft]) -> None:
         self.ac: Dict[str, Aircraft] = aircraft
@@ -13,9 +14,8 @@ class World:
         self.time_s = 0.0
         self.paused = False
 
-    def reset(self, aircraft: Dict[str, Aircraft]):
-        self.ac = aircraft
-        self.time_s = 0.0
+        # New: whether pilot manual override fully takes precedence over TCAS
+        self.manual_override = False
 
     def step(self, dt: float):
         if self.paused:
@@ -31,6 +31,9 @@ class World:
         # Advisory per ownship
         for cs, own in self.ac.items():
             own.advisory = self.logic.step(own, rels_by_own.get(cs, {}))
-            apply_command(own)
+            # apply_command now accepts override flag
+            from tcas.advisory import apply_command
+            apply_command(own, override_manual=self.manual_override)
 
         self.time_s += dt
+

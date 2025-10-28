@@ -1,0 +1,4 @@
+callsign,x_m,y_m,vel_x_mps,vel_y_mps,alt_ft,climb_fps,color_r,color_g,color_b
+OWN001,0,0,130,0,10000,0,90,200,110
+INT001,12000,0,-130,0,10550,0,200,80,80
+INT002, -8000, -6000, 140, 60, 11800, -5, 200,185,60

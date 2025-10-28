@@ -21,22 +21,37 @@ def closing_tau_and_dcpA(rel_pos_m: Tuple[float,float],
 def classify_contact(rel_pos_m, rel_vel_mps, rel_alt_ft) -> Tuple[M.AdvisoryType, str]:
     tau, d_cpa = closing_tau_and_dcpA(rel_pos_m, rel_vel_mps)
 
-    # First: any TA?
+    # --- CLEAR / RESET CONDITIONS ---
+    CLEAR_RANGE_M = 1852 * 13       # 13 NM (slightly > TA range)
+    if (
+        d_cpa > CLEAR_RANGE_M           # outside radar scope
+        or tau > 60.0                   # time to CPA too long
+        or abs(rel_alt_ft) > 4000       # vertical separation large
+        or tau < 0                      # diverging
+    ):
+        return (M.AdvisoryType.CLEAR, "Clear (out of range or diverging)")
+
+    # --- THREAT EVALUATION ---
+    # First check TA conditions
     if tau < config.TA_TAU_S and d_cpa < config.TA_HORZ_M and abs(rel_alt_ft) < config.TA_VERT_FT:
-        # Escalate to RA if tighter
+        # Escalate to RA if thresholds tighter
         if tau < config.RA_TAU_S and d_cpa < config.RA_HORZ_M and abs(rel_alt_ft) < config.RA_VERT_FT:
-            # Pick climb/descend direction to increase vertical separation
+            # Resolution Advisory (RA)
             if rel_alt_ft > 0:
-                # Intruder above -> descend
+                # Intruder above → descend
                 return (M.AdvisoryType.RA_DESCEND,
                         f"RA: DESCEND (τ={tau:.1f}s d_cpa={d_cpa:.0f}m rel_alt=+{rel_alt_ft:.0f}ft)")
             elif rel_alt_ft < 0:
-                # Intruder below -> climb
+                # Intruder below → climb
                 return (M.AdvisoryType.RA_CLIMB,
                         f"RA: CLIMB (τ={tau:.1f}s d_cpa={d_cpa:.0f}m rel_alt={rel_alt_ft:.0f}ft)")
             else:
                 return (M.AdvisoryType.RA_MAINTAIN,
                         f"RA: MAINTAIN (τ={tau:.1f}s d_cpa={d_cpa:.0f}m)")
         else:
-            return (M.AdvisoryType.TA, f"TA (τ={tau:.1f}s d_cpa={d_cpa:.0f}m rel_alt={rel_alt_ft:.0f}ft)")
-    return (M.AdvisoryType.CLEAR, "Clear")
+            # Traffic Advisory (TA)
+            return (M.AdvisoryType.TA,
+                    f"TA (τ={tau:.1f}s d_cpa={d_cpa:.0f}m rel_alt={rel_alt_ft:.0f}ft)")
+    # Otherwise clear
+    return (M.AdvisoryType.CLEAR, "Clear (no conflict)")
+

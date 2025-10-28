@@ -4,6 +4,7 @@ import config
 from tcas.models import Aircraft, AdvisoryType
 from .colors import WHITE, CYAN, AMBER, RED, GREY
 from .hud import draw_hud
+from .radar_display import draw_radar
 
 def world_to_screen(x_m: float, y_m: float) -> Tuple[int,int]:
     # Center origin; +x to right, +y up -> screen y inverted
@@ -30,19 +31,13 @@ def draw_advisory_ring(screen, ac: Aircraft):
         return
     pygame.draw.circle(screen, color, (x, y), 36, 2)
 
-def render(screen, font, time_s: float, aircraft: Dict[str, Aircraft]):
-    screen.fill(config.BG_COLOR)
-    # Draw links (simple SA lines)
-    cs_list = list(aircraft.values())
-    for i in range(len(cs_list)):
-        for j in range(i+1, len(cs_list)):
-            a, b = cs_list[i], cs_list[j]
-            ax, ay = world_to_screen(*a.pos_m)
-            bx, by = world_to_screen(*b.pos_m)
-            pygame.draw.line(screen, CYAN, (ax, ay), (bx, by), 1)
+def render(screen, font, time_s, aircraft):
+    # find ownship (first aircraft)
+    if not aircraft: return
+    own = list(aircraft.values())[0]
+    traffic = aircraft
+    draw_radar(screen, font, own, traffic)
 
-    for ac in aircraft.values():
-        draw_advisory_ring(screen, ac)
-        draw_aircraft(screen, font, ac)
-
-    draw_hud(screen, font, time_s, aircraft)
+    # optional: overlay time text bottom-left
+    txt = font.render(f"t = {time_s:6.1f}s", True, (200,200,200))
+    screen.blit(txt, (8, config.SCREEN_H - 24))

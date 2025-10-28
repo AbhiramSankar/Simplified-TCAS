@@ -24,6 +24,11 @@ class Aircraft:
     advisory: Advisory = field(default_factory=Advisory)
     color: Tuple[int, int, int] = (200, 200, 220)
 
+    # New fields for manual control
+    control_mode: str = "AUTO"   # "AUTO" or "MANUAL" - MANUAL means pilot input active
+    manual_cmd: Optional[str] = None  # "CLIMB", "DESCEND", "MAINTAIN", or None
+    target_climb_fps: Optional[float] = None  # target fps when manual command set
+
     def step(self, dt: float):
         self.pos_m = (self.pos_m[0] + self.vel_mps[0]*dt,
                       self.pos_m[1] + self.vel_mps[1]*dt)
