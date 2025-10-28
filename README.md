@@ -1,4 +1,3 @@
-============================================================
 Simplified TCAS II Simulation
 ============================================================
 
@@ -30,6 +29,7 @@ Features
 ------------------------------------------------------------
 Project Structure
 ------------------------------------------------------------
+```bash
 tcas_sim/
 ├─ run.py                 : Entry point
 ├─ config.py              : Global configuration
@@ -53,22 +53,30 @@ tcas_sim/
    ├─ hud.py              : Side panel with controls and advisories
    ├─ colors.py           : Common color definitions
    └─ pygame_app.py       : Pygame rendering loop
+```
 
 ------------------------------------------------------------
 Installation
 ------------------------------------------------------------
 
 1. Clone or download the repository:
-   git clone https://github.com/<yourusername>/tcas_sim.git
-   cd tcas_sim
+```bash
+   git clone https://github.com/AbhiramSankar/Simplified-TCAS.git
+   cd Simplified-TCAS
+```
 
 2. Create and activate a virtual environment:
+```bash
    python -m venv venv
    source venv/bin/activate        (Linux/macOS)
    venv\Scripts\activate           (Windows)
+```
 
 3. Install dependencies:
+```bash
    pip install -r requirements.txt
+```
+
 
 ------------------------------------------------------------
 Running the Simulation
@@ -77,23 +85,29 @@ Running the Simulation
 Option 1 - Using a CSV Input File:
 ----------------------------------
 Prepare a CSV file (example: data/sample_flightplan.csv):
-
+```bash
 callsign,x_m,y_m,vel_x_mps,vel_y_mps,alt_ft,climb_fps,color_r,color_g,color_b
 OWN001,0,0,150,0,10000,0,255,255,255
 INT001,10000,0,-150,0,10500,-10,255,180,0
 INT002,-8000,-5000,140,70,11800,-5,255,255,255
+```
 
 Run:
+```bash
    python run.py --input data/sample_flightplan.csv
+```
 
 Option 2 - Using Built-in Scenarios:
 ------------------------------------
+```bash
    python run.py
-Press 1, 2, or 3 to load predefined encounters (Head-On, Crossing, Overtake).
+   Press 1, 2, or 3 to load predefined encounters (Head-On, Crossing, Overtake).
+```
 
 ------------------------------------------------------------
 Controls
 ------------------------------------------------------------
+```bash
 SPACE        : Pause / Resume
 R            : Reload scenario or CSV
 TAB          : Select next aircraft
@@ -103,7 +117,7 @@ UP / DOWN    : Adjust climb or descent
 C            : Clear manual command
 1 / 2 / 3    : Load scenarios (only in scenario mode)
 ESC          : Exit simulation
-
+```
 ------------------------------------------------------------
 Display Elements
 ------------------------------------------------------------
@@ -143,7 +157,6 @@ Notes
 ------------------------------------------------------------
 Author
 ------------------------------------------------------------
-Abhiram Sankar
-Ontario Tech University
-Simplified TCAS II Simulation
-License: MIT
+Abhiram Sankar__
+Ontario Tech University__
+Simplified TCAS II Simulation__
