@@ -157,6 +157,6 @@ Notes
 ------------------------------------------------------------
 Author
 ------------------------------------------------------------
-Abhiram Sankar__
-Ontario Tech University__
-Simplified TCAS II Simulation__
+Abhiram Sankar\
+Ontario Tech University\
+Simplified TCAS II Simulation
