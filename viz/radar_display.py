@@ -32,11 +32,14 @@ def draw_intruder(screen, font, own: Aircraft, intr: Aircraft, center):
     # determine altitude tag (two-digit hundreds)
     diff = intr.alt_ft - own.alt_ft
     hundreds = int(diff / 100)
-    tag = f"{hundreds:+03d}"
-    if intr.climb_fps > 2:
-        tag += "↑"
-    elif intr.climb_fps < -2:
-        tag += "↓"
+    tag = ""
+    if abs(diff) <= 1200:
+        tag = f"{hundreds:+03d}"
+        if intr.climb_fps > 2:
+            tag += "↑"
+        elif intr.climb_fps < -2:
+            tag += "↓"
+
 
     # determine advisory type and draw appropriate symbol
     adv = intr.advisory.kind
@@ -108,6 +111,7 @@ def draw_radar(screen, font, own: Aircraft, traffic):
             continue
         draw_intruder(screen, font, own, intr, center)
 
+    
     # range label
     label = font.render("12 NM", True, WHITE)
     screen.blit(label, (center_x - 20, center_y - radius + 10))

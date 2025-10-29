@@ -37,7 +37,3 @@ def render(screen, font, time_s, aircraft):
     own = list(aircraft.values())[0]
     traffic = aircraft
     draw_radar(screen, font, own, traffic)
-
-    # optional: overlay time text bottom-left
-    txt = font.render(f"t = {time_s:6.1f}s", True, (200,200,200))
-    screen.blit(txt, (8, config.SCREEN_H - 24))
