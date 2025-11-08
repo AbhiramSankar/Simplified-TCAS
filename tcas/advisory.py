@@ -31,7 +31,7 @@ class AdvisoryLogic:
         best = (AdvisoryType.CLEAR, "Clear")
 
         for cs, (rel_pos, rel_vel, rel_alt) in rels.items():
-            kind, reason = classify_contact(rel_pos, rel_vel, rel_alt)
+            kind, reason = classify_contact(rel_pos, rel_vel, rel_alt, prev_state=own.advisory.kind)
             if priority[kind] > priority[best[0]]:
                 best = (kind, f"{reason} vs {cs}")
 
