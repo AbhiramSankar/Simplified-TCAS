@@ -1,2 +1,2 @@
 pygame>=2.5.0          # Visualization and UI rendering
-pyttsx3>=2.90          # Offline Text-to-Speech for TCAS callouts
+pyttsx3==2.91          # Offline Text-to-Speech for TCAS callouts
