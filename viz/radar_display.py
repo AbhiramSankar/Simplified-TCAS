@@ -2,23 +2,35 @@ import pygame, math, time
 import config
 from tcas.models import Aircraft, AdvisoryType
 from .colors import WHITE, AMBER, RED, CYAN, GREEN
-import pyttsx3
 import threading
+import queue
+
 
 # Flash control state
 flash_state = False
 last_flash_time = 0
 last_advisory = None
+last_speech_time = 0
 
-# Initialize TTS engine (thread-safe)
-tts_engine = pyttsx3.init()
-tts_engine.setProperty('rate', 180)   # words per minute
-tts_engine.setProperty('volume', 2.0)
+tts_queue = queue.Queue()
+
+def tts_worker():
+    import pyttsx3
+    engine = pyttsx3.init()
+    engine.setProperty("rate", 180)
+    engine.setProperty("volume", 1.0)
+    while True:
+        text = tts_queue.get()
+        if text is None:
+            break
+        engine.say('<pitch middle="5">'+text+'</pitch>')
+        engine.runAndWait()
+        tts_queue.task_done()
+
+threading.Thread(target=tts_worker, daemon=True).start()
 
 def speak_async(text):
-    """Speak the given text in a background thread."""
-    threading.Thread(target=lambda: tts_engine.say('<pitch middle="5">'+text+'</pitch>') or tts_engine.runAndWait(), daemon=True).start()
-
+    tts_queue.put(text)
 
 def draw_intruder(screen, font, own: Aircraft, intr: Aircraft, center):
     cx, cy = center
@@ -69,11 +81,11 @@ def draw_intruder(screen, font, own: Aircraft, intr: Aircraft, center):
 
 def draw_alert_box(screen, advisory_text, radar_rect):
     """Draw flashing alert box below radar (in lower section)."""
-    global flash_state, last_flash_time, last_advisory
+    global flash_state, last_flash_time, last_advisory, last_speech_time
     now = time.time()
     flash_interval = 0.5        # seconds between toggles
     clear_interval = 2  # how long CLEAR flashes once
-
+    speech_interval = 3
 
     # choose color
     advisories_map = {
@@ -88,10 +100,22 @@ def draw_alert_box(screen, advisory_text, radar_rect):
     display_text, color = advisories_map.get(advisory_text.upper(), ("CLEAR", WHITE))
     
     current = advisory_text.upper()
+    
+    # --- TTS Callouts ---
+    if last_advisory != current and current == "TA":
+            speak_async("Traffic, traffic")
 
-    # --- Flash Control Logic ---
     # --- Flash control ---
     if current != "CLEAR":
+        print (now - last_speech_time, speech_interval)
+        if now - last_speech_time > speech_interval:
+            if current == "RA_CLIMB":
+                speak_async("Climb, climb")
+            elif current == "RA_DESCEND":
+                speak_async("Descend, descend")
+            elif current == "RA_MAINTAIN":
+                speak_async("Maintain vertical speed")
+            last_speech_time = now
         # Normal flashing for TA/RA
         if now - last_flash_time > flash_interval:
             flash_state = not flash_state
@@ -101,22 +125,12 @@ def draw_alert_box(screen, advisory_text, radar_rect):
         if last_advisory and last_advisory != "CLEAR":
             # Record transition start once
             last_flash_time = now
+            last_speech_time = now
             flash_state = True
             speak_async("Clear of conflict")
         # Keep light on for 2 s after transition
         if flash_state and (now - last_flash_time) > clear_interval:
             flash_state = False  # stop after 2 s
-
-    # --- TTS Callouts ---
-    if last_advisory != current:
-        if current == "TA":
-            speak_async("Traffic, traffic")
-        elif current == "RA_CLIMB":
-            speak_async("Climb, climb")
-        elif current == "RA_DESCEND":
-            speak_async("Descend, descend")
-        elif current == "RA_MAINTAIN":
-            speak_async("Maintain vertical speed")
             
     last_advisory = current
     
