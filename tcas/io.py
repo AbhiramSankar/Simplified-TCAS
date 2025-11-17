@@ -1,6 +1,89 @@
-import csv
+import csv, math, os
 from typing import Dict
 from .models import Aircraft
+
+NM_TO_M = 1852.0
+KT_TO_MPS = 0.514444
+FPM_TO_FPS = 1.0 / 60.0
+
+def load_adsb_with_ownship(ownship_file: str, intruder_folder: str) -> Dict[str, Aircraft]:
+    """
+    Load one ADS-B-style CSV for ownship and a folder of ADS-B-style CSVs
+    for intruders. Ownship is placed at (0,0) with zero horizontal velocity.
+    Intruders are positioned using range_nm/bearing_deg relative to ownship.
+    """
+
+    aircraft: Dict[str, Aircraft] = {}
+
+    # ---- 1) Read ownship row ----
+    with open(ownship_file, newline="") as f:
+        reader = csv.DictReader(f)
+        own_rows = list(reader)
+
+    if not own_rows:
+        raise RuntimeError(f"No rows in ownship file: {ownship_file}")
+
+    own_row = own_rows[0]
+    own_id = own_row["aircraft_id"]
+
+    alt_ft = float(own_row["altitude_ft"])
+    climb_fps = float(own_row["vertical_rate_fpm"]) * FPM_TO_FPS
+
+    # Ownship at origin, zero horizontal speed (reference frame)
+    aircraft[own_id] = Aircraft(
+        callsign=own_id,
+        pos_m=(0.0, 0.0),
+        vel_mps=(0.0, 0.0),
+        alt_ft=alt_ft,
+        climb_fps=climb_fps,
+        color=(255, 255, 255),
+    )
+
+    # ---- 2) Read all intruder CSVs from folder ----
+    for fname in os.listdir(intruder_folder):
+        if not fname.lower().endswith(".csv"):
+            continue
+
+        full = os.path.join(intruder_folder, fname)
+        with open(full, newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                ac_id = row["aircraft_id"]
+                if ac_id == own_id:
+                    # Skip if ownship file was also dropped here
+                    continue
+
+                range_nm = float(row["range_nm"])
+                bearing_deg = float(row["bearing_deg"])
+                range_m = range_nm * NM_TO_M
+                bearing_rad = math.radians(bearing_deg)
+
+                # 0° = North, 90° = East; y negative is North
+                x_m = range_m * math.sin(bearing_rad)
+                y_m = -range_m * math.cos(bearing_rad)
+
+                # Radial range rate → approx horizontal velocity along LOS
+                range_rate_kt = float(row["range_rate_kt"])
+                radial_mps = range_rate_kt * KT_TO_MPS
+                vx_mps = radial_mps * math.sin(bearing_rad)
+                vy_mps = -radial_mps * math.cos(bearing_rad)
+
+                alt_ft = float(row["altitude_ft"])
+                climb_fps = float(row["vertical_rate_fpm"]) * FPM_TO_FPS
+
+                aircraft[ac_id] = Aircraft(
+                    callsign=ac_id,
+                    pos_m=(x_m, y_m),
+                    vel_mps=(vx_mps, vy_mps),
+                    alt_ft=alt_ft,
+                    climb_fps=climb_fps,
+                    color=(255, 255, 255),
+                )
+
+    if len(aircraft) == 1:
+        raise RuntimeError("Only ownship loaded; no intruders found.")
+
+    return aircraft
 
 # CSV columns:
 # callsign,x_m,y_m,vel_x_mps,vel_y_mps,alt_ft,climb_fps,color_r,color_g,color_b

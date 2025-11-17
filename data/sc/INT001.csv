@@ -1,0 +1,2 @@
+time_s,aircraft_id,df,icao24,mode,altitude_ft,vertical_rate_fpm,on_ground,tcas_equipped,identity,squawk,range_nm,bearing_deg,range_rate_kt
+0.0,INT001,17,4CA123,A,10550,0,0,1,INT001,7000,6.5,90,-250

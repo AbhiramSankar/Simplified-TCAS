@@ -1,8 +1,8 @@
-import pygame, sys, argparse
+import pygame, sys, argparse, os
 from sim.world import World
 from sim.scenarios import SCENARIOS
 import config
-from tcas.io import load_from_csv
+from tcas.io import load_from_csv, load_adsb_with_ownship
 from viz.pygame_app import render
 from viz.hud import draw_hud
 
@@ -12,6 +12,11 @@ def load_scenario(key: str):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+    "--ownship",
+    help="ADS-B CSV file for ownship (if using ADS-B style inputs)",
+    default=None,
+    )
     parser.add_argument("--input", "-i", help="CSV file with aircraft to load (overrides scenario)", default=None)
     parser.add_argument("--scenario", "-s", help="scenario key (1/2/3) if no input CSV", default="1")
     args = parser.parse_args()
@@ -24,7 +29,15 @@ def main():
 
     if args.input:
         try:
-            ac = load_from_csv(args.input)
+            if args.ownship and os.path.isdir(args.input):
+                # Ownship CSV + intruder folder
+                ac = load_adsb_with_ownship(args.ownship, args.input)
+            elif os.path.isdir(args.input):
+                # (optional) legacy ADS-B folder loader, or just error
+                raise RuntimeError("For ADS-B folders, please also provide --ownship")
+            else:
+                # Original single-file Cartesian CSV
+                ac = load_from_csv(args.input)
         except Exception as e:
             print("Failed to load CSV:", e)
             ac = load_scenario(args.scenario)
