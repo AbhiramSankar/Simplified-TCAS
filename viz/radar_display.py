@@ -107,7 +107,7 @@ def draw_alert_box(screen, advisory_text, radar_rect):
 
     # --- Flash control ---
     if current != "CLEAR":
-        print (now - last_speech_time, speech_interval)
+        # print (now - last_speech_time, speech_interval)
         if now - last_speech_time > speech_interval:
             if current == "RA_CLIMB":
                 speak_async("Climb, climb")

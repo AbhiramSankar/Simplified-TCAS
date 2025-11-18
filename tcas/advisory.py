@@ -4,12 +4,14 @@ from .models import Aircraft, Advisory, AdvisoryType
 from .threat import classify_contact
 import config
 
+
 class State(Enum):
     CLEAR = auto()
     TA = auto()
     RA_CLIMB = auto()
     RA_DESCEND = auto()
     RA_MAINTAIN = auto()
+
 
 class AdvisoryLogic:
     """
@@ -31,7 +33,13 @@ class AdvisoryLogic:
         best = (AdvisoryType.CLEAR, "Clear")
 
         for cs, (rel_pos, rel_vel, rel_alt) in rels.items():
-            kind, reason = classify_contact(rel_pos, rel_vel, rel_alt, prev_state=own.advisory.kind)
+            kind, reason = classify_contact(
+                own.alt_ft,           # NEW: ownship altitude for SL selection
+                rel_pos,
+                rel_vel,
+                rel_alt,
+                prev_state=own.advisory.kind,
+            )
             if priority[kind] > priority[best[0]]:
                 best = (kind, f"{reason} vs {cs}")
 
@@ -39,6 +47,7 @@ class AdvisoryLogic:
         # that increases |vertical separation| relative to current intruder set.
         kind, reason = best
         return Advisory(kind=kind, reason=reason)
+
 
 def apply_command(own: Aircraft, override_manual: bool = False):
     """
