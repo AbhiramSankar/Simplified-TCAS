@@ -21,6 +21,9 @@ MIN_SAFE_VERT_FT = 300.0
 # Colors
 BG_COLOR = (12, 12, 18)
 
+# How close to 'same altitude' we consider aircraft for RA sense (ft)
+RA_DEADBAND_FT = 200.0
+
 # ---------------------------------------------------------------------
 # TCAS II–inspired Sensitivity Levels (Table 2, TCAS II v7.1 booklet)
 # Each row: (alt_min_ft, alt_max_ft, SL, TA_tau_s, RA_tau_s,
@@ -88,3 +91,10 @@ HMD_RA_M = 1.3 * NM_TO_M
 # ---------------------------------------------------------------------
 GROUND_ALT_FT = 50.0          # ~ radar altitude "on ground" threshold
 RA_TOTAL_INHIBIT_ALT_FT = 1000.0
+
+# --- NMAC (Near Mid-Air Collision) thresholds ---
+# A "safety violation" event if BOTH are true:
+#   - horizontal separation < 0.3 NM
+#   - vertical separation   < 300 ft
+NMAC_HORZ_M = 0.3 * NM_TO_M   # ≈ 556 m
+NMAC_VERT_FT = 300.0

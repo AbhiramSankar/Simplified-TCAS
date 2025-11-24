@@ -1,0 +1,2 @@
+time_s,aircraft_id,df,icao24,mode,altitude_ft,vertical_rate_fpm,on_ground,tcas_equipped,identity,squawk,range_nm,bearing_deg,range_rate_kt
+0,INTR_HIVERT,17,HIV222,S,30000,-6000,0,1,INH1,8001,15,5,-450

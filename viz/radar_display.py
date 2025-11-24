@@ -11,8 +11,94 @@ flash_state = False
 last_flash_time = 0
 last_advisory = None
 last_speech_time = 0
+last_loop_time = 0  # for repeating callouts
 
 tts_queue = queue.Queue()
+
+
+def get_aural_annunciation(prev: str | None, curr: str) -> str | None:
+    """
+    Map advisory transitions to TCAS II v7.1–style aural annunciations,
+    using explicit RA subtypes.
+    """
+    if prev is None:
+        prev = "NONE"
+
+    prev = prev.upper()
+    curr = curr.upper()
+
+    ra_states = {n for n in AdvisoryType.__members__ if n.startswith("RA_")}
+
+    # --- Traffic Advisory ---
+    if curr == "TA" and prev != "TA":
+        return "Traffic, traffic"
+
+    # --- RA Removed / Clear of conflict ---
+    if curr == "CLEAR" and prev in ra_states:
+        return "Clear of conflict"
+
+    # --- Preventive RA (no change in VS) ---
+    if curr == "RA_MAINTAIN" and prev in {"CLEAR", "TA", "NONE"}:
+        return "Monitor vertical speed"
+
+    # --- Basic Climb / Descend RAs ---
+    if curr == "RA_CLIMB" and prev not in {"RA_CLIMB", "RA_INCREASE_CLIMB"}:
+        return "Climb, climb"
+    if curr == "RA_DESCEND" and prev not in {"RA_DESCEND", "RA_INCREASE_DESCEND"}:
+        return "Descend, descend"
+
+    # --- Altitude Crossing RAs ---
+    if curr == "RA_CROSSING_CLIMB":
+        return "Climb, crossing climb"
+    if curr == "RA_CROSSING_DESCEND":
+        return "Descend, crossing descend"
+
+    # --- Increase Climb / Increase Descent RAs ---
+    if curr == "RA_INCREASE_CLIMB":
+        return "Increase climb, increase climb"
+    if curr == "RA_INCREASE_DESCEND":
+        return "Increase descent, increase descent"
+
+    # --- Reduce Climb / Reduce Descent RAs (Level off) ---
+    if curr in {"RA_REDUCE_CLIMB", "RA_REDUCE_DESCEND"}:
+        return "Level off, level off"
+
+    # --- Maintain Rate RA after active RA ---
+    if curr == "RA_MAINTAIN" and prev in {
+        "RA_CLIMB", "RA_DESCEND",
+        "RA_INCREASE_CLIMB", "RA_INCREASE_DESCEND",
+        "RA_CROSSING_CLIMB", "RA_CROSSING_DESCEND",
+    }:
+        return "Maintain vertical speed, maintain"
+
+    # --- RA Reversals ---
+    if prev in {"RA_DESCEND", "RA_INCREASE_DESCEND", "RA_CROSSING_DESCEND"} and curr in {
+        "RA_CLIMB", "RA_INCREASE_CLIMB", "RA_CROSSING_CLIMB"
+    }:
+        return "Climb, climb NOW"
+
+    if prev in {"RA_CLIMB", "RA_INCREASE_CLIMB", "RA_CROSSING_CLIMB"} and curr in {
+        "RA_DESCEND", "RA_INCREASE_DESCEND", "RA_CROSSING_DESCEND"
+    }:
+        return "Descend, descend NOW"
+
+    return None
+
+def get_state_loop_phrase(curr: str) -> str | None:
+    """
+    Phrase to repeat while an advisory remains active.
+    Used to loop audio until CLEAR.
+    """
+    curr = curr.upper()
+    if curr == "TA":
+        return "Traffic, traffic"
+    if curr == "RA_CLIMB":
+        return "Climb, climb"
+    if curr == "RA_DESCEND":
+        return "Descend, descend"
+    if curr == "RA_MAINTAIN":
+        return "Monitor vertical speed"
+    return None  # CLEAR or unknown → no loop
 
 def tts_worker():
     import pyttsx3
@@ -61,7 +147,7 @@ def draw_intruder(screen, font, own: Aircraft, intr: Aircraft, center):
     size = 8
     color = WHITE
 
-    if adv in (AdvisoryType.RA_CLIMB, AdvisoryType.RA_DESCEND, AdvisoryType.RA_MAINTAIN):
+    if adv in (AdvisoryType.RA_CLIMB, AdvisoryType.RA_DESCEND, AdvisoryType.RA_MAINTAIN, AdvisoryType.RA_CROSSING_CLIMB, AdvisoryType.RA_CROSSING_DESCEND, AdvisoryType.RA_INCREASE_CLIMB, AdvisoryType.RA_INCREASE_DESCEND, AdvisoryType.RA_REDUCE_CLIMB, AdvisoryType.RA_REDUCE_DESCEND):
         pygame.draw.rect(screen, RED, pygame.Rect(x - size, y - size, size * 2, size * 2))
         color = RED
     elif adv == AdvisoryType.TA:
@@ -80,42 +166,48 @@ def draw_intruder(screen, font, own: Aircraft, intr: Aircraft, center):
 
 
 def draw_alert_box(screen, advisory_text, radar_rect):
-    """Draw flashing alert box below radar (in lower section)."""
-    global flash_state, last_flash_time, last_advisory, last_speech_time
+    """Draw flashing alert box below radar (in lower section) and play TCAS aural."""
+    global flash_state, last_flash_time, last_advisory, last_speech_time, last_loop_time
     now = time.time()
     flash_interval = 0.5        # seconds between toggles
-    clear_interval = 2  # how long CLEAR flashes once
-    speech_interval = 3
+    clear_interval = 2.0        # how long CLEAR flashes once
+    loop_interval = 4.0         # repeat RA/TA callouts every 4 s while active
 
-    # choose color
+    # Map advisory kind → short label + color for the box
     advisories_map = {
-        "CLEAR": ("CLEAR", GREEN),
-        "TA": ("TRAFFIC", AMBER),
-        "RA_CLIMB": ("CLIMB", RED),
-        "RA_DESCEND": ("DESCEND", RED),
-        "RA_MAINTAIN": ("MAINTAIN", RED),
+        "CLEAR":               ("CLEAR", GREEN),
+        "TA":                  ("TRAFFIC", AMBER),
+        "RA_CLIMB":            ("CLIMB", RED),
+        "RA_DESCEND":          ("DESCEND", RED),
+        "RA_MAINTAIN":         ("MAINTAIN VS", RED),
+        "RA_INCREASE_CLIMB":   ("INCREASE CLIMB", RED),
+        "RA_INCREASE_DESCEND": ("INCREASE DESCENT", RED),
+        "RA_REDUCE_CLIMB":     ("REDUCE CLIMB", RED),
+        "RA_REDUCE_DESCEND":   ("REDUCE DESCENT", RED),
+        "RA_CROSSING_CLIMB":   ("XING CLIMB", RED),
+        "RA_CROSSING_DESCEND": ("XING DESCENT", RED),
     }
 
-    # Normalize input to uppercase to ensure case-insensitive lookup
-    display_text, color = advisories_map.get(advisory_text.upper(), ("CLEAR", WHITE))
-    
     current = advisory_text.upper()
-    
-    # --- TTS Callouts ---
-    if last_advisory != current and current == "TA":
-            speak_async("Traffic, traffic")
+    display_text, color = advisories_map.get(current, ("CLEAR", WHITE))
+
+    # --- Transition-based aural (table-style) ---
+    if last_advisory != current:
+        phrase = get_aural_annunciation(last_advisory, current)
+        if phrase is not None:
+            speak_async(phrase)
+            last_speech_time = now
+            # If we just announced CLEAR OF CONFLICT, we *do not* loop it.
+
+    # --- Looping while advisory remains active (no looping of CLEAR) ---
+    if current != "CLEAR":
+        loop_phrase = get_state_loop_phrase(current)
+        if loop_phrase is not None and (now - last_loop_time) > loop_interval:
+            speak_async(loop_phrase)
+            last_loop_time = now
 
     # --- Flash control ---
     if current != "CLEAR":
-        # print (now - last_speech_time, speech_interval)
-        if now - last_speech_time > speech_interval:
-            if current == "RA_CLIMB":
-                speak_async("Climb, climb")
-            elif current == "RA_DESCEND":
-                speak_async("Descend, descend")
-            elif current == "RA_MAINTAIN":
-                speak_async("Maintain vertical speed")
-            last_speech_time = now
         # Normal flashing for TA/RA
         if now - last_flash_time > flash_interval:
             flash_state = not flash_state
@@ -123,35 +215,34 @@ def draw_alert_box(screen, advisory_text, radar_rect):
     else:
         # Only flash once when switching INTO CLEAR
         if last_advisory and last_advisory != "CLEAR":
-            # Record transition start once
             last_flash_time = now
-            last_speech_time = now
             flash_state = True
-            speak_async("Clear of conflict")
-        # Keep light on for 2 s after transition
+        # Keep light on for clear_interval after transition, then stop
         if flash_state and (now - last_flash_time) > clear_interval:
-            flash_state = False  # stop after 2 s
-            
+            flash_state = False
+
+    # Remember current advisory for next frame
     last_advisory = current
-    
+
+    # --- Draw box below radar ---
     screen_w, screen_h = screen.get_size()
-    # Radar occupies radar_rect; put box below it
-    box_w, box_h = 300, 70
+    box_w, box_h = 350, 70
     box_x = radar_rect.centerx - box_w // 2
     box_y = radar_rect.bottom + 20  # 20px gap below radar
 
-    # Adjust if it would exceed screen height
     if box_y + box_h > screen_h:
         box_y = screen_h - box_h - 10
 
     rect = pygame.Rect(box_x, box_y, box_w, box_h)
-    pygame.draw.rect(screen, color if flash_state else (40, 40, 40), rect, border_radius=10)
+    box_color = color if flash_state else (40, 40, 40)
+
+    pygame.draw.rect(screen, box_color, rect, border_radius=10)
+
 
     font = pygame.font.Font(None, 44)
     text = font.render(display_text.upper(), True, (0, 0, 0))
     text_rect = text.get_rect(center=rect.center)
     screen.blit(text, text_rect)
-
 
 def draw_radar(screen, font, own: Aircraft, traffic):
     """Split screen: top for radar, bottom for advisory alert box."""

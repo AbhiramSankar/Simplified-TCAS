@@ -1,0 +1,2 @@
+time_s,aircraft_id,df,icao24,mode,altitude_ft,vertical_rate_fpm,on_ground,tcas_equipped,identity,squawk,range_nm,bearing_deg,range_rate_kt
+0,INTR_MULTI3_C,17,MUL303,S,20500,-500,0,1,INM3,7603,11,135,-460

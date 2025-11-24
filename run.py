@@ -6,19 +6,29 @@ from tcas.io import load_from_csv, load_adsb_with_ownship
 from viz.pygame_app import render
 from viz.hud import draw_hud
 
+
 def load_scenario(key: str):
     fn = SCENARIOS.get(key, SCENARIOS["1"])
     return fn()
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-    "--ownship",
-    help="ADS-B CSV file for ownship (if using ADS-B style inputs)",
-    default=None,
+        "--ownship",
+        help="ADS-B CSV file for ownship (if using ADS-B style inputs)",
+        default=None,
     )
-    parser.add_argument("--input", "-i", help="CSV file with aircraft to load (overrides scenario)", default=None)
-    parser.add_argument("--scenario", "-s", help="scenario key (1/2/3) if no input CSV", default="1")
+    parser.add_argument(
+        "--input", "-i",
+        help="CSV file with aircraft to load OR folder of ADS-B intruder CSVs",
+        default=None,
+    )
+    parser.add_argument(
+        "--scenario", "-s",
+        help="scenario key (1/2/3) if no input CSV",
+        default="1",
+    )
     args = parser.parse_args()
 
     pygame.init()
@@ -27,13 +37,14 @@ def main():
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("consolas,menlo,monospace", 16)
 
+    # ---- Initial load: either ADS-B ownship+folder, or single CSV, or scenario ----
     if args.input:
         try:
             if args.ownship and os.path.isdir(args.input):
-                # Ownship CSV + intruder folder
+                # Ownship CSV + intruder folder (ADS-B-style)
                 ac = load_adsb_with_ownship(args.ownship, args.input)
             elif os.path.isdir(args.input):
-                # (optional) legacy ADS-B folder loader, or just error
+                # Folder given but no ownship file
                 raise RuntimeError("For ADS-B folders, please also provide --ownship")
             else:
                 # Original single-file Cartesian CSV
@@ -53,7 +64,7 @@ def main():
 
     running = True
     while running:
-        dt = clock.tick(int(1.0/config.DT)) / 1000.0
+        dt = clock.tick(int(1.0 / config.DT)) / 1000.0
         dt *= config.SPEED_MULTIPLIER
 
         for e in pygame.event.get():
@@ -62,30 +73,51 @@ def main():
             elif e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_ESCAPE:
                     running = False
+
                 elif e.key == pygame.K_SPACE:
                     world.paused = not world.paused
+
                 elif e.key == pygame.K_r:
-                    # reload scenario or CSV
+                    # Reload scenario or CSV using same logic as at startup
                     if args.input:
-                        world.reset(load_from_csv(args.input))
+                        try:
+                            if args.ownship and os.path.isdir(args.input):
+                                ac = load_adsb_with_ownship(args.ownship, args.input)
+                            elif os.path.isdir(args.input):
+                                raise RuntimeError("For ADS-B folders, please also provide --ownship")
+                            else:
+                                ac = load_from_csv(args.input)
+                        except Exception as ex:
+                            print("Failed to reload CSV:", ex)
+                            ac = load_scenario(args.scenario)
                     else:
-                        world.reset(load_scenario(args.scenario))
+                        ac = load_scenario(args.scenario)
+
+                    world.reset(ac)
                     callsigns = list(world.ac.keys())
                     selected_idx = 0
                     selected = callsigns[selected_idx] if callsigns else None
+
                 elif e.key == pygame.K_1:
                     world.reset(load_scenario("1"))
-                    callsigns = list(world.ac.keys()); selected_idx = 0; selected = callsigns[selected_idx] if callsigns else None
+                    callsigns = list(world.ac.keys())
+                    selected_idx = 0
+                    selected = callsigns[selected_idx] if callsigns else None
+
                 elif e.key == pygame.K_2:
                     world.reset(load_scenario("2"))
-                    callsigns = list(world.ac.keys()); selected_idx = 0; selected = callsigns[selected_idx] if callsigns else None
+                    callsigns = list(world.ac.keys())
+                    selected_idx = 0
+                    selected = callsigns[selected_idx] if callsigns else None
+
                 elif e.key == pygame.K_3:
                     world.reset(load_scenario("3"))
-                    callsigns = list(world.ac.keys()); selected_idx = 0; selected = callsigns[selected_idx] if callsigns else None
+                    callsigns = list(world.ac.keys())
+                    selected_idx = 0
+                    selected = callsigns[selected_idx] if callsigns else None
 
-                # NEW UI interactions
+                # --- Selection & manual control ---
                 elif e.key == pygame.K_TAB:
-                    # cycle selection
                     callsigns = list(world.ac.keys())
                     if not callsigns:
                         selected = None
@@ -96,12 +128,11 @@ def main():
                 elif e.key == pygame.K_m:
                     # toggle manual mode for selected aircraft
                     if selected:
-                        ac = world.ac[selected]
-                        ac.control_mode = "MANUAL" if ac.control_mode != "MANUAL" else "AUTO"
-                        if ac.control_mode == "AUTO":
-                            # clear manual cmd when going back to auto
-                            ac.manual_cmd = None
-                            ac.target_climb_fps = None
+                        ac_sel = world.ac[selected]
+                        ac_sel.control_mode = "MANUAL" if ac_sel.control_mode != "MANUAL" else "AUTO"
+                        if ac_sel.control_mode == "AUTO":
+                            ac_sel.manual_cmd = None
+                            ac_sel.target_climb_fps = None
 
                 elif e.key == pygame.K_o:
                     # toggle manual override flag in world (global)
@@ -110,51 +141,52 @@ def main():
                 elif e.key == pygame.K_c:
                     # clear manual command for selected aircraft
                     if selected:
-                        ac = world.ac[selected]
-                        ac.manual_cmd = None
-                        ac.target_climb_fps = None
+                        ac_sel = world.ac[selected]
+                        ac_sel.manual_cmd = None
+                        ac_sel.target_climb_fps = None
 
                 elif e.key == pygame.K_UP:
                     # increase pilot climb request (if MANUAL)
                     if selected:
-                        ac = world.ac[selected]
-                        # If not in MANUAL, enable but keep as soft assist
-                        if ac.control_mode != "MANUAL":
-                            ac.control_mode = "MANUAL"
-                        # set manual command to CLIMB and a modest target (user can press multiple times)
-                        ac.manual_cmd = "CLIMB"
-                        # increment in steps of 5 ft/s (~300 fpm)
-                        ac.target_climb_fps = (ac.target_climb_fps or 10.0) + 5.0
+                        ac_sel = world.ac[selected]
+                        if ac_sel.control_mode != "MANUAL":
+                            ac_sel.control_mode = "MANUAL"
+                        ac_sel.manual_cmd = "CLIMB"
+                        ac_sel.target_climb_fps = (ac_sel.target_climb_fps or 10.0) + 5.0
 
                 elif e.key == pygame.K_DOWN:
                     # increase descent request (more negative)
                     if selected:
-                        ac = world.ac[selected]
-                        if ac.control_mode != "MANUAL":
-                            ac.control_mode = "MANUAL"
-                        ac.manual_cmd = "DESCEND"
-                        ac.target_climb_fps = (ac.target_climb_fps or -10.0) - 5.0
+                        ac_sel = world.ac[selected]
+                        if ac_sel.control_mode != "MANUAL":
+                            ac_sel.control_mode = "MANUAL"
+                        ac_sel.manual_cmd = "DESCEND"
+                        ac_sel.target_climb_fps = (ac_sel.target_climb_fps or -10.0) - 5.0
 
                 elif e.key == pygame.K_SPACE and pygame.key.get_mods() & pygame.KMOD_SHIFT:
-                    # (alternative) Shift+Space to set MAINTAIN for selected
+                    # Shift+Space: MAINTAIN for selected
                     if selected:
-                        ac = world.ac[selected]
-                        ac.control_mode = "MANUAL"
-                        ac.manual_cmd = "MAINTAIN"
-                        ac.target_climb_fps = 0.0
+                        ac_sel = world.ac[selected]
+                        ac_sel.control_mode = "MANUAL"
+                        ac_sel.manual_cmd = "MAINTAIN"
+                        ac_sel.target_climb_fps = 0.0
 
         # world step
         world.step(config.DT)
 
-        # Render
+        # Render radar + HUD
         render(screen, font, world.time_s, world.ac)
-        # draw HUD with selected & override
-        draw_hud(screen, font, world.time_s, world.ac, selected=selected, manual_override=world.manual_override)
+        draw_hud(screen, font, world.time_s, world.ac,
+                 selected=selected, manual_override=world.manual_override)
 
         pygame.display.flip()
 
+    if hasattr(world, "close"):
+        world.close()
+
     pygame.quit()
     sys.exit(0)
+
 
 if __name__ == "__main__":
     main()

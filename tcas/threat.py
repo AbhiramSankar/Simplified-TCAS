@@ -3,6 +3,7 @@ from .math_utils import dot, norm
 from . import models as M
 import config
 
+CROSSING_ALT_FT = 250.0
 
 def closing_tau_and_dcpA(rel_pos_m: Tuple[float, float],
                          rel_vel_mps: Tuple[float, float]) -> Tuple[float, float]:
@@ -10,8 +11,8 @@ def closing_tau_and_dcpA(rel_pos_m: Tuple[float, float],
     if v2 <= 1e-6:
         return float('inf'), norm(rel_pos_m)
     tau = - dot(rel_pos_m, rel_vel_mps) / v2
-    d_cpa = norm((rel_pos_m[0] + rel_vel_mps[0] * tau,
-                  rel_pos_m[1] + rel_vel_mps[1] * tau))
+    d_cpa = norm((rel_pos_m[0] + (rel_vel_mps[0] * tau),
+                  rel_pos_m[1] + (rel_vel_mps[1] * tau)))
     return tau, d_cpa
 
 
@@ -19,22 +20,7 @@ def classify_contact(own_alt_ft,
                      rel_pos_m,
                      rel_vel_mps,
                      rel_alt_ft,
-                     prev_state=None) -> Tuple[M.AdvisoryType, str]:
-    """
-    Classify a single intruder relative to ownship into CLEAR / TA / RA_*.
-
-    State evolution:
-        CLEAR → TA → RA → CLEAR
-    (no RA → TA → CLEAR).
-
-    Enhancements:
-      - Sensitivity levels (SL-dependent tau/DMOD/ZTHR)
-      - Horizontal Miss Distance (HMD) RA filter
-      - Low-altitude / ground RA inhibition:
-          * All RAs inhibited below ~1000 ft AGL
-          * No RAs when ownship is 'on ground' (~< 50 ft)
-    """
-
+                     prev_state=None):
     tau, d_cpa = closing_tau_and_dcpA(rel_pos_m, rel_vel_mps)
 
     # ---- Outer CLEAR gate (very loose) ----
@@ -42,8 +28,8 @@ def classify_contact(own_alt_ft,
     if (
         d_cpa > CLEAR_RANGE_M
         or tau > 60.0
-        or abs(rel_alt_ft) > 4000
-        or tau < 0
+        or abs(rel_alt_ft) > 4000.0
+        or tau < 0.0
     ):
         return (M.AdvisoryType.CLEAR, "Clear (out of range or diverging)")
 
@@ -54,7 +40,7 @@ def classify_contact(own_alt_ft,
     # ---- Sensitivity Level thresholds (tau / DMOD / ZTHR) ----
     th = config.get_sl_thresholds(own_alt_ft)
     ta_tau   = th["ta_tau"]
-    ra_tau   = th["ra_tau"]      # may be None (RA inhibited at low alt)
+    ra_tau   = th["ra_tau"]
     ta_dmod  = th["ta_dmod_m"]
     ra_dmod  = th["ra_dmod_m"]
     ta_zthr  = th["ta_zthr_ft"]
@@ -74,43 +60,77 @@ def classify_contact(own_alt_ft,
             abs(rel_alt_ft) < ra_zthr
         )
     else:
-        base_is_ra = False  # RA inhibited for this SL
+        base_is_ra = False  # RA inhibited at this SL
 
     # ---- Low-altitude / ground inhibition for RA ----
-    # Below ~1000 ft or on ground, we do not consider any RA.
     if low_alt_total_inhibit or ground:
         base_is_ra = False
 
     # ---- Horizontal Miss Distance (HMD) filter ----
     hmd_allows_ra = d_cpa <= config.HMD_RA_M
 
-    # For escalation decisions (no previous RA), RA must satisfy both
-    # base RA envelope and HMD filter.
     is_ra = base_is_ra and hmd_allows_ra
+    
+    # Helper: are we currently in ANY RA?
+    prev_is_ra = isinstance(prev_state, M.AdvisoryType) and prev_state.name.startswith("RA_")
+
+    # ------------------------------------------------------------------
+    # Helper to choose a "base" RA sense from geometry (CLIMB/DESC/CROSS)
+    # ------------------------------------------------------------------
+    def base_ra_kind() -> M.AdvisoryType:
+        if abs(rel_alt_ft) < CROSSING_ALT_FT:
+            # Treat nearly same-level as crossing RA
+            if rel_alt_ft >= 0:
+                return M.AdvisoryType.RA_CROSSING_DESCEND
+            else:
+                return M.AdvisoryType.RA_CROSSING_CLIMB
+        else:
+            if rel_alt_ft > 0:
+                return M.AdvisoryType.RA_DESCEND
+            elif rel_alt_ft < 0:
+                return M.AdvisoryType.RA_CLIMB
+            else:
+                # Exact same altitude: arbitrarily choose climb
+                return M.AdvisoryType.RA_CLIMB
 
     # =========================================================
-    # RA HYSTERESIS: once RA, stay RA until fully clear OR
-    # until HMD / low-alt / ground logic terminates it.
+    # RA HYSTERESIS: if already in RA_*, keep RA until fully
+    # clear or inhibited, and refine to INCREASE / REDUCE / CROSS.
     # =========================================================
-    if prev_state in (
-        M.AdvisoryType.RA_CLIMB,
-        M.AdvisoryType.RA_DESCEND,
-        M.AdvisoryType.RA_MAINTAIN,
-    ):
-        # If we've descended into the low-altitude / ground region,
-        # immediately terminate any active RA.
+    if prev_is_ra:
+        # Immediate termination when entering low-altitude / ground region
         if low_alt_total_inhibit or ground:
             return (M.AdvisoryType.CLEAR, "Clear (RA inhibited at low altitude/ground)")
 
-        # Still inside RA envelope and HMD allows RA → keep same RA
+        # Still inside RA envelope and HMD allows RA → refine RA subtype
         if hmd_allows_ra and base_is_ra:
-            return (prev_state, "Maintain RA (still in RA envelope)")
+            kind = base_ra_kind()
 
-        # HMD says horizontal miss distance will be large → end RA early
+            # Strengthen / weaken based on tau w.r.t. RA threshold
+            if ra_tau is not None:
+                if tau < ra_tau / 2.0:
+                    # More urgent: Increase RA
+                    if "DESCEND" in kind.name:
+                        kind = M.AdvisoryType.RA_INCREASE_DESCEND
+                    else:
+                        kind = M.AdvisoryType.RA_INCREASE_CLIMB
+                elif tau > ra_tau * 1.2:
+                    # Improving but still RA envelope: Reduce RA
+                    if "DESCEND" in kind.name:
+                        kind = M.AdvisoryType.RA_REDUCE_DESCEND
+                    else:
+                        kind = M.AdvisoryType.RA_REDUCE_CLIMB
+
+            return (
+                kind,
+                f"{kind.name} (τ={tau:.1f}s d_cpa={d_cpa:.0f} m Δalt={rel_alt_ft:.0f} ft)",
+            )
+
+        # HMD says lateral miss distance will be large → end RA early
         if not hmd_allows_ra:
             return (M.AdvisoryType.CLEAR, "Clear of conflict (HMD filter)")
 
-        # No RA envelope and no TA envelope → fully clear
+        # No RA and no TA envelopes → CLEAR
         if (not base_is_ra) and (not is_ta):
             return (M.AdvisoryType.CLEAR, "Clear of conflict (RA resolved)")
 
@@ -122,21 +142,11 @@ def classify_contact(own_alt_ft,
     # CLEAR / TA → TA / RA / CLEAR
     # =========================================================
     if is_ra:
-        if rel_alt_ft > 0:
-            return (
-                M.AdvisoryType.RA_DESCEND,
-                f"RA: DESCEND (τ={tau:.1f}s d_cpa={d_cpa:.0f} m Δalt=+{rel_alt_ft:.0f} ft)",
-            )
-        elif rel_alt_ft < 0:
-            return (
-                M.AdvisoryType.RA_CLIMB,
-                f"RA: CLIMB (τ={tau:.1f}s d_cpa={d_cpa:.0f} m Δalt={rel_alt_ft:.0f} ft)",
-            )
-        else:
-            return (
-                M.AdvisoryType.RA_MAINTAIN,
-                f"RA: MAINTAIN (τ={tau:.1f}s d_cpa={d_cpa:.0f} m)",
-            )
+        kind = base_ra_kind()
+        return (
+            kind,
+            f"{kind.name} (τ={tau:.1f}s d_cpa={d_cpa:.0f} m Δalt={rel_alt_ft:.0f} ft)",
+        )
 
     if is_ta:
         return (
