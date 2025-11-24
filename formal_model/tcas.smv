@@ -1,0 +1,151 @@
+-----------------------------------------------------------------------------
+--  TCAS Advisory Logic Formal Model (Abhiram Sankar)
+--  Abstraction of Python logic in tcas/threat.py
+--
+--  Models:
+--     - TA envelope (ta_env)
+--     - RA envelope (ra_env)
+--     - RA hysteresis via prev_adv (in transition logic)
+--     - Low-altitude RA inhibition (low_alt)
+--     - HMD (Horizontal Miss Distance) filter (hmd_large)
+--
+--  Environment predicates (ta_env, ra_env, low_alt, hmd_large)
+--  are nondeterministic abstractions of continuous geometry.
+-----------------------------------------------------------------------------
+
+MODULE main
+
+    VAR
+        ---------------------------------------------------------------------
+        -- TCAS advisory state
+        ---------------------------------------------------------------------
+        adv      : {CLEAR, TA, RA_CLIMB, RA_DESCEND, RA_MAINTAIN};
+        prev_adv : {CLEAR, TA, RA_CLIMB, RA_DESCEND, RA_MAINTAIN};
+
+        ---------------------------------------------------------------------
+        -- Environment predicates
+        ---------------------------------------------------------------------
+        ta_env    : boolean;   -- TA thresholds satisfied
+        ra_env    : boolean;   -- RA thresholds satisfied
+        low_alt   : boolean;   -- Ownship altitude < inhibit_alt
+        hmd_large : boolean;   -- Predicted miss distance > HMD_RA_M
+
+    -------------------------------------------------------------------------
+    -- INITIAL STATES
+    -------------------------------------------------------------------------
+    ASSIGN
+        init(adv)      := CLEAR;
+        init(prev_adv) := CLEAR;
+
+        init(ta_env)    := FALSE;
+        init(ra_env)    := FALSE;
+        init(low_alt)   := FALSE;
+        init(hmd_large) := FALSE;
+
+        ---------------------------------------------------------------------
+        -- Environment evolves nondeterministically
+        ---------------------------------------------------------------------
+        next(ta_env)    := {TRUE, FALSE};
+        next(ra_env)    := {TRUE, FALSE};
+        next(low_alt)   := {TRUE, FALSE};
+        next(hmd_large) := {TRUE, FALSE};
+
+        ---------------------------------------------------------------------
+        -- Previous advisory tracks adv with 1-step delay
+        ---------------------------------------------------------------------
+        next(prev_adv) := adv;
+
+        ---------------------------------------------------------------------
+        -- TCAS Advisory Logic (Finite-State Abstraction)
+        --
+        -- Priority:
+        --   1) Low-altitude inhibit
+        --   2) HMD filter
+        --   3) RA hysteresis (keep RA in TA-only region)
+        --   4) New RA if ra_env
+        --   5) TA if ta_env
+        --   6) CLEAR otherwise
+        ---------------------------------------------------------------------
+        next(adv) :=
+            case
+
+                -----------------------------------------------------------------
+                -- 1) RA TOTAL INHIBITION BELOW INHIBIT ALTITUDE
+                -----------------------------------------------------------------
+                low_alt = TRUE :
+                    case
+                        ta_env = TRUE : TA;
+                        TRUE          : CLEAR;
+                    esac;
+
+                -----------------------------------------------------------------
+                -- 2) HMD FILTER: large miss distance → clear RA
+                -----------------------------------------------------------------
+                hmd_large = TRUE &
+                adv in {RA_CLIMB, RA_DESCEND, RA_MAINTAIN} :
+                    CLEAR;
+
+                -----------------------------------------------------------------
+                -- 3) RA HYSTERESIS:
+                --    If previously RA and now TA-only (ta_env & !ra_env) with
+                --    no inhibit (low_alt/HMD), KEEP the RA.
+                -----------------------------------------------------------------
+                (prev_adv in {RA_CLIMB, RA_DESCEND, RA_MAINTAIN}) &
+                ta_env = TRUE &
+                ra_env = FALSE &
+                low_alt = FALSE &
+                hmd_large = FALSE :
+                    prev_adv;
+
+                -----------------------------------------------------------------
+                -- 4) Normal RA onset: RA envelope satisfied, no inhibit/HMD
+                -----------------------------------------------------------------
+                ra_env = TRUE & low_alt = FALSE & hmd_large = FALSE :
+                    RA_CLIMB;  -- simplified choice
+
+                -----------------------------------------------------------------
+                -- 5) TA-only region
+                -----------------------------------------------------------------
+                ta_env = TRUE :
+                    TA;
+
+                -----------------------------------------------------------------
+                -- 6) Otherwise clear of conflict
+                -----------------------------------------------------------------
+                TRUE :
+                    CLEAR;
+
+            esac;
+
+-----------------------------------------------------------------------------
+-- HELPER DEFINITIONS
+-----------------------------------------------------------------------------
+DEFINE
+    ra_state := adv in {RA_CLIMB, RA_DESCEND, RA_MAINTAIN};
+
+-----------------------------------------------------------------------------
+-- CTL PROPERTIES
+--   P1: Low-altitude inhibits RA (next-step)
+--   P2: HMD clears RA (next-step)
+--   P3: Liveness: from every state, CLEAR is reachable.
+-----------------------------------------------------------------------------
+
+-- P1: Low-altitude RA inhibition (matches Python: once low_alt is true,
+--     next decision cycle must not be RA).
+CTLSPEC
+    AG ( low_alt -> AX !ra_state );
+
+
+-- P2: HMD filter (once HMD says large miss, next cycle must not be RA).
+CTLSPEC
+    AG ( hmd_large -> AX !ra_state );
+
+
+-- P3: Liveness: from every state, it is possible to eventually reach CLEAR.
+CTLSPEC
+    AG ( EF adv = CLEAR );
+
+
+-----------------------------------------------------------------------------
+-- End of TCAS SMV model
+-----------------------------------------------------------------------------
