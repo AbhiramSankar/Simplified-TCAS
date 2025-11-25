@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Dict, Tuple
 import csv
 import os
+import random
 
 from tcas.models import Aircraft, Advisory, AdvisoryType
 from tcas.advisory import AdvisoryLogic, apply_command
@@ -15,18 +16,18 @@ import config
 # Classify RA kinds by vertical direction
 UP_RAS = {
     AdvisoryType.RA_CLIMB,
-    # Extended types (if defined in AdvisoryType)
     getattr(AdvisoryType, "RA_INCREASE_CLIMB", AdvisoryType.RA_CLIMB),
     getattr(AdvisoryType, "RA_CROSSING_CLIMB", AdvisoryType.RA_CLIMB),
+    getattr(AdvisoryType, "RA_DO_NOT_DESCEND", AdvisoryType.RA_CLIMB),  # upward sense
 }
 DOWN_RAS = {
     AdvisoryType.RA_DESCEND,
     getattr(AdvisoryType, "RA_INCREASE_DESCEND", AdvisoryType.RA_DESCEND),
     getattr(AdvisoryType, "RA_CROSSING_DESCEND", AdvisoryType.RA_DESCEND),
+    getattr(AdvisoryType, "RA_DO_NOT_CLIMB", AdvisoryType.RA_DESCEND),  # downward sense
 }
 NEUTRAL_RAS = {
     AdvisoryType.RA_MAINTAIN,
-    # Preventive / reduce types are treated as neutral or weakly directional
     getattr(AdvisoryType, "RA_REDUCE_CLIMB", AdvisoryType.RA_MAINTAIN),
     getattr(AdvisoryType, "RA_REDUCE_DESCEND", AdvisoryType.RA_MAINTAIN),
 }
@@ -62,10 +63,29 @@ if hasattr(AdvisoryType, "RA_REDUCE_CLIMB") and hasattr(AdvisoryType, "RA_REDUCE
 if hasattr(AdvisoryType, "RA_CROSSING_CLIMB") and hasattr(AdvisoryType, "RA_CROSSING_DESCEND"):
     RA_FLIP_MAP[AdvisoryType.RA_CROSSING_CLIMB] = AdvisoryType.RA_CROSSING_DESCEND
     RA_FLIP_MAP[AdvisoryType.RA_CROSSING_DESCEND] = AdvisoryType.RA_CROSSING_CLIMB
+    
+if hasattr(AdvisoryType, "RA_DO_NOT_CLIMB") and hasattr(AdvisoryType, "RA_DO_NOT_DESCEND"):
+    RA_FLIP_MAP[AdvisoryType.RA_DO_NOT_CLIMB] = AdvisoryType.RA_DO_NOT_DESCEND
+    RA_FLIP_MAP[AdvisoryType.RA_DO_NOT_DESCEND] = AdvisoryType.RA_DO_NOT_CLIMB
+
 
 
 class World:
-    def __init__(self, aircraft: Dict[str, Aircraft], log_path: str | None = "logs/tcas_log.csv") -> None:
+    def __init__(self, aircraft: Dict[str, Aircraft], log_path: str | None = "logs/tcas_log.csv", scenario_name=None) -> None:
+        
+        for cs, ac in aircraft.items():
+            # Bad altitude scenario
+            if cs == "INTR_BADALT":
+                ac.alt_bias_ft = random.uniform(-800.0, 800.0)
+                ac.alt_ft += ac.alt_bias_ft
+                print(f"[BAD ALT] {cs}: bias={ac.alt_bias_ft:.1f} ft   sensed={ac.alt_ft:.1f}")
+
+            # Bad vertical rate scenario
+            if cs == "INTR_BADVS":
+                ac.climb_bias_fps = random.uniform(-10.0, 10.0)   # ~±600 fpm
+                ac.climb_fps += ac.climb_bias_fps
+                print(f"[BAD VS]  {cs}: bias={ac.climb_bias_fps:.2f} fps   sensed={ac.climb_fps:.2f}")
+        
         self.ac: Dict[str, Aircraft] = aircraft
         self.sensing = Sensing()
         self.tracking = Tracking()
@@ -99,12 +119,31 @@ class World:
                 "intr_id",
                 "rel_x_m",
                 "rel_y_m",
-                "rel_alt_ft",
+
+                # relative altitude (sensed vs true)
+                "rel_alt_sensed_ft",
+                "rel_alt_true_ft",
+
+                # tau / dCPA (still based on geometry)
                 "tau_s",
                 "d_cpa_m",
+
                 "advisory",
                 "is_nmac",
+
+                # ownship altitude & VS (sensed vs true)
+                "own_alt_sensed_ft",
+                "own_alt_true_ft",
+                "own_climb_sensed_fps",
+                "own_climb_true_fps",
+
+                # intruder altitude & VS (sensed vs true)
+                "intr_alt_sensed_ft",
+                "intr_alt_true_ft",
+                "intr_climb_sensed_fps",
+                "intr_climb_true_fps",
             ])
+
 
     def step(self, dt: float) -> None:
         if self.paused:
@@ -137,22 +176,64 @@ class World:
             # Logging + NMAC metrics per intruder
             if self.log_writer is not None:
                 for intr_id, (rel_pos, rel_vel, rel_alt_ft) in rels.items():
+                    # biased values (what TCAS uses)
+                    own = self.ac[own_id]
+                    intr = self.ac[intr_id]
+
+                    # sensed values (what TCAS uses)
+                    own_alt_sensed = own.alt_ft
+                    intr_alt_sensed = intr.alt_ft
+                    own_climb_sensed = own.climb_fps
+                    intr_climb_sensed = intr.climb_fps
+
+                    # biases
+                    own_alt_bias = getattr(own, "alt_bias_ft", 0.0)
+                    intr_alt_bias = getattr(intr, "alt_bias_ft", 0.0)
+                    own_vs_bias = getattr(own, "climb_bias_fps", 0.0)
+                    intr_vs_bias = getattr(intr, "climb_bias_fps", 0.0)
+
+                    # true values (updated continuously every step)
+                    own_alt_true = own_alt_sensed - own_alt_bias
+                    intr_alt_true = intr_alt_sensed - intr_alt_bias
+                    rel_alt_true = intr_alt_true - own_alt_true
+
+                    own_climb_true = own_climb_sensed - own_vs_bias
+                    intr_climb_true = intr_climb_sensed - intr_vs_bias
+
+                    # NMAC & metrics based on TRUE geometry
                     horiz_m, vert_ft, tau, d_cpa, is_nmac = self.monitor.compute_metrics(
-                        rel_pos, rel_vel, rel_alt_ft
+                        rel_pos,
+                        rel_vel,
+                        rel_alt_true
                     )
 
+                    # Write row
                     self.log_writer.writerow([
                         f"{self.time_s:.2f}",
                         own_id,
                         intr_id,
                         f"{rel_pos[0]:.1f}",
                         f"{rel_pos[1]:.1f}",
-                        f"{rel_alt_ft:.1f}",
+
+                        f"{rel_alt_ft:.1f}",        # sensed
+                        f"{rel_alt_true:.1f}",      # true
+
                         f"{tau:.2f}",
                         f"{d_cpa:.1f}",
                         own.advisory.kind.name,
                         1 if is_nmac else 0,
+
+                        f"{own_alt_sensed:.1f}",
+                        f"{own_alt_true:.1f}",
+                        f"{own_climb_sensed:.2f}",
+                        f"{own_climb_true:.2f}",
+
+                        f"{intr_alt_sensed:.1f}",
+                        f"{intr_alt_true:.1f}",
+                        f"{intr_climb_sensed:.2f}",
+                        f"{intr_climb_true:.2f}",
                     ])
+
 
         self.time_s += dt
 

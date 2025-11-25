@@ -21,6 +21,14 @@ def classify_contact(own_alt_ft,
                      rel_vel_mps,
                      rel_alt_ft,
                      prev_state=None):
+    """
+    Classify a single intruder contact into CLEAR / TA / RA_* states.
+
+    Now includes *preventive* RAs (RA_DO_NOT_CLIMB / RA_DO_NOT_DESCEND) for
+    "milder" conflicts: cases that are inside the RA envelope but with
+    relatively large tau and moderate vertical separation, where a full
+    corrective CLIMB/DESCEND is not yet required.
+    """
     tau, d_cpa = closing_tau_and_dcpA(rel_pos_m, rel_vel_mps)
 
     # ---- Outer CLEAR gate (very loose) ----
@@ -70,7 +78,7 @@ def classify_contact(own_alt_ft,
     hmd_allows_ra = d_cpa <= config.HMD_RA_M
 
     is_ra = base_is_ra and hmd_allows_ra
-    
+
     # Helper: are we currently in ANY RA?
     prev_is_ra = isinstance(prev_state, M.AdvisoryType) and prev_state.name.startswith("RA_")
 
@@ -92,6 +100,22 @@ def classify_contact(own_alt_ft,
             else:
                 # Exact same altitude: arbitrarily choose climb
                 return M.AdvisoryType.RA_CLIMB
+
+    # ------------------------------------------------------------------
+    # Helper to choose a *preventive* RA sense from geometry
+    # (Do Not Climb / Do Not Descend).
+    # ------------------------------------------------------------------
+    def preventive_ra_kind() -> M.AdvisoryType:
+        if rel_alt_ft > 0:
+            # Intruder above → unsafe direction is up → "Do Not Climb"
+            return M.AdvisoryType.RA_DO_NOT_CLIMB
+        elif rel_alt_ft < 0:
+            # Intruder below → unsafe direction is down → "Do Not Descend"
+            return M.AdvisoryType.RA_DO_NOT_DESCEND
+        else:
+            # Exactly same altitude: either preventive sense is arguable;
+            # choose Do Not Climb by default.
+            return M.AdvisoryType.RA_DO_NOT_CLIMB
 
     # =========================================================
     # RA HYSTERESIS: if already in RA_*, keep RA until fully
@@ -115,7 +139,7 @@ def classify_contact(own_alt_ft,
                     else:
                         kind = M.AdvisoryType.RA_INCREASE_CLIMB
                 elif tau > ra_tau * 1.2:
-                    # Improving but still RA envelope: Reduce RA
+                    # Improving but still in RA envelope: Reduce RA
                     if "DESCEND" in kind.name:
                         kind = M.AdvisoryType.RA_REDUCE_DESCEND
                     else:
@@ -130,19 +154,44 @@ def classify_contact(own_alt_ft,
         if not hmd_allows_ra:
             return (M.AdvisoryType.CLEAR, "Clear of conflict (HMD filter)")
 
-        # No RA and no TA envelopes → CLEAR
-        if (not base_is_ra) and (not is_ta):
+        # At this point: we are NOT in RA envelope anymore (base_is_ra == False)
+
+        # Case 1: also not in TA envelope → fully clear
+        if not is_ta:
             return (M.AdvisoryType.CLEAR, "Clear of conflict (RA resolved)")
 
-        # TA may still be true, but we do NOT downgrade RA → TA.
-        return (prev_state, "Maintain RA until conflict fully clear")
+        # Case 2: TA still true, but RA envelope ended → issue RA_MAINTAIN
+        # This is where "Maintain vertical speed, maintain" / "maintain altitude"
+        # should happen.
+        return (
+            M.AdvisoryType.RA_MAINTAIN,
+            f"RA_MAINTAIN (TA only; hold VS, τ={tau:.1f}s d_cpa={d_cpa:.0f} m Δalt={rel_alt_ft:.0f} ft)",
+        )
 
     # =========================================================
     # Normal escalation logic (no previous RA)
     # CLEAR / TA → TA / RA / CLEAR
     # =========================================================
+
     if is_ra:
-        kind = base_ra_kind()
+        # Decide whether this is a "mild" RA case where a preventive
+        # RA (Do Not Climb / Do Not Descend) is sufficient.
+        use_preventive = False
+        if ra_tau is not None and ra_zthr is not None:
+            # Heuristic: tau fairly close to RA threshold and vertical
+            # separation still moderately large → preventive RA.
+            tau_ratio = tau / ra_tau if ra_tau > 0 else 0.0
+            alt_ratio = abs(rel_alt_ft) / ra_zthr if ra_zthr > 0 else 0.0
+
+            # Example: inside RA envelope but not yet very urgent
+            if 0.8 <= tau_ratio <= 1.2 and alt_ratio >= 0.4:
+                use_preventive = True
+
+        if use_preventive:
+            kind = preventive_ra_kind()
+        else:
+            kind = base_ra_kind()
+
         return (
             kind,
             f"{kind.name} (τ={tau:.1f}s d_cpa={d_cpa:.0f} m Δalt={rel_alt_ft:.0f} ft)",

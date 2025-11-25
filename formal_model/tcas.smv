@@ -1,5 +1,5 @@
 -----------------------------------------------------------------------------
---  TCAS Advisory Logic Formal Model (Abhiram Sankar)
+--  TCAS Advisory Logic Formal Model (updated)
 --  Abstraction of Python logic in tcas/threat.py
 --
 --  Models:
@@ -8,6 +8,8 @@
 --     - RA hysteresis via prev_adv (in transition logic)
 --     - Low-altitude RA inhibition (low_alt)
 --     - HMD (Horizontal Miss Distance) filter (hmd_large)
+--     - Preventive RAs (RA_DO_NOT_CLIMB / RA_DO_NOT_DESCEND)
+--     - Maintain RA when RA envelope ends but TA still holds (RA_MAINTAIN)
 --
 --  Environment predicates (ta_env, ra_env, low_alt, hmd_large)
 --  are nondeterministic abstractions of continuous geometry.
@@ -17,23 +19,30 @@ MODULE main
 
     VAR
         ---------------------------------------------------------------------
-        -- TCAS advisory state
+        -- Current advisory and previous advisory
         ---------------------------------------------------------------------
-        adv      : {CLEAR, TA, RA_CLIMB, RA_DESCEND, RA_MAINTAIN};
-        prev_adv : {CLEAR, TA, RA_CLIMB, RA_DESCEND, RA_MAINTAIN};
+        adv      : {CLEAR, TA,
+                    RA_CLIMB, RA_DESCEND,
+                    RA_MAINTAIN,
+                    RA_DO_NOT_CLIMB, RA_DO_NOT_DESCEND};
+
+        prev_adv : {CLEAR, TA,
+                    RA_CLIMB, RA_DESCEND,
+                    RA_MAINTAIN,
+                    RA_DO_NOT_CLIMB, RA_DO_NOT_DESCEND};
 
         ---------------------------------------------------------------------
-        -- Environment predicates
+        -- Environment predicates (abstracted from continuous geometry)
         ---------------------------------------------------------------------
-        ta_env    : boolean;   -- TA thresholds satisfied
-        ra_env    : boolean;   -- RA thresholds satisfied
-        low_alt   : boolean;   -- Ownship altitude < inhibit_alt
-        hmd_large : boolean;   -- Predicted miss distance > HMD_RA_M
+        ta_env    : boolean;  -- TA envelope holds
+        ra_env    : boolean;  -- RA envelope holds
+        low_alt   : boolean;  -- below RA inhibit altitude / on ground
+        hmd_large : boolean;  -- HMD large enough to cancel RA
 
-    -------------------------------------------------------------------------
-    -- INITIAL STATES
-    -------------------------------------------------------------------------
     ASSIGN
+        ---------------------------------------------------------------------
+        -- Initial state: CLEAR, no envelopes active
+        ---------------------------------------------------------------------
         init(adv)      := CLEAR;
         init(prev_adv) := CLEAR;
 
@@ -43,7 +52,7 @@ MODULE main
         init(hmd_large) := FALSE;
 
         ---------------------------------------------------------------------
-        -- Environment evolves nondeterministically
+        -- Environment evolution is nondeterministic
         ---------------------------------------------------------------------
         next(ta_env)    := {TRUE, FALSE};
         next(ra_env)    := {TRUE, FALSE};
@@ -53,7 +62,14 @@ MODULE main
         ---------------------------------------------------------------------
         -- Previous advisory tracks adv with 1-step delay
         ---------------------------------------------------------------------
-        next(prev_adv) := adv;
+        next(prev_adv) :=
+            case
+                -- If HMD OR low_alt occurs now, force prev_adv = CLEAR
+                hmd_large = TRUE : CLEAR;
+                low_alt   = TRUE : CLEAR;
+
+                TRUE : adv;
+            esac;
 
         ---------------------------------------------------------------------
         -- TCAS Advisory Logic (Finite-State Abstraction)
@@ -61,67 +77,84 @@ MODULE main
         -- Priority:
         --   1) Low-altitude inhibit
         --   2) HMD filter
-        --   3) RA hysteresis (keep RA in TA-only region)
-        --   4) New RA if ra_env
+        --   3) RA hysteresis (keep RA in TA-only region as RA_MAINTAIN)
+        --   4) New RA if ra_env (preventive vs corrective)
         --   5) TA if ta_env
         --   6) CLEAR otherwise
         ---------------------------------------------------------------------
         next(adv) :=
             case
-
                 -----------------------------------------------------------------
-                -- 1) RA TOTAL INHIBITION BELOW INHIBIT ALTITUDE
+                -- 1) Low-altitude inhibit: no RA
                 -----------------------------------------------------------------
                 low_alt = TRUE :
-                    case
-                        ta_env = TRUE : TA;
-                        TRUE          : CLEAR;
-                    esac;
+                case
+                    ta_env = TRUE : TA;
+                    TRUE          : CLEAR;
+                esac;
 
                 -----------------------------------------------------------------
-                -- 2) HMD FILTER: large miss distance → clear RA
+                -- 2) HMD filter: whenever hmd_large is TRUE in this state,
+                --    the NEXT advisory MUST be CLEAR (no RA, no TA).
                 -----------------------------------------------------------------
-                hmd_large = TRUE &
-                adv in {RA_CLIMB, RA_DESCEND, RA_MAINTAIN} :
-                    CLEAR;
+                hmd_large = TRUE :
+                CLEAR;
 
                 -----------------------------------------------------------------
-                -- 3) RA HYSTERESIS:
-                --    If previously RA and now TA-only (ta_env & !ra_env) with
-                --    no inhibit (low_alt/HMD), KEEP the RA.
+                -- 3) RA hysteresis (only when we were in RA before and
+                --    no low_alt / hmd_large fired above)
                 -----------------------------------------------------------------
-                (prev_adv in {RA_CLIMB, RA_DESCEND, RA_MAINTAIN}) &
-                ta_env = TRUE &
-                ra_env = FALSE &
-                low_alt = FALSE &
-                hmd_large = FALSE :
+                (prev_adv in {RA_CLIMB,
+                            RA_DESCEND,
+                            RA_MAINTAIN,
+                            RA_DO_NOT_CLIMB,
+                            RA_DO_NOT_DESCEND}) :
+                case
+                    ra_env = TRUE :
                     prev_adv;
+                    ta_env = TRUE & ra_env = FALSE :
+                    RA_MAINTAIN;
+                    TRUE :
+                    CLEAR;
+                esac;
 
                 -----------------------------------------------------------------
-                -- 4) Normal RA onset: RA envelope satisfied, no inhibit/HMD
+                -- 4) New RA if ra_env (preventive vs corrective)
                 -----------------------------------------------------------------
                 ra_env = TRUE & low_alt = FALSE & hmd_large = FALSE :
-                    RA_CLIMB;  -- simplified choice
+                case
+                    ta_env = TRUE : RA_DO_NOT_CLIMB;
+                    TRUE          : RA_CLIMB;
+                esac;
 
                 -----------------------------------------------------------------
                 -- 5) TA-only region
                 -----------------------------------------------------------------
                 ta_env = TRUE :
-                    TA;
+                TA;
 
                 -----------------------------------------------------------------
-                -- 6) Otherwise clear of conflict
+                -- 6) Otherwise CLEAR
                 -----------------------------------------------------------------
                 TRUE :
-                    CLEAR;
-
+                CLEAR;
             esac;
 
------------------------------------------------------------------------------
+
+---------------------------------------------
 -- HELPER DEFINITIONS
 -----------------------------------------------------------------------------
 DEFINE
-    ra_state := adv in {RA_CLIMB, RA_DESCEND, RA_MAINTAIN};
+    -------------------------------------------------------------------------
+    -- Any RA state: includes corrective, preventive, and maintain RAs.
+    -------------------------------------------------------------------------
+    ra_state := adv in {
+        RA_CLIMB,
+        RA_DESCEND,
+        RA_MAINTAIN,
+        RA_DO_NOT_CLIMB,
+        RA_DO_NOT_DESCEND
+    };
 
 -----------------------------------------------------------------------------
 -- CTL PROPERTIES
@@ -130,18 +163,20 @@ DEFINE
 --   P3: Liveness: from every state, CLEAR is reachable.
 -----------------------------------------------------------------------------
 
--- P1: Low-altitude RA inhibition (matches Python: once low_alt is true,
---     next decision cycle must not be RA).
+-- P1: Low-altitude RA inhibition:
+--     Once low_alt is true, the *next* decision cycle must not be RA.
 CTLSPEC
     AG ( low_alt -> AX !ra_state );
 
 
--- P2: HMD filter (once HMD says large miss, next cycle must not be RA).
+-- P2: HMD filter:
+--     Once hmd_large is true, the next cycle must not be RA.
 CTLSPEC
     AG ( hmd_large -> AX !ra_state );
 
 
--- P3: Liveness: from every state, it is possible to eventually reach CLEAR.
+-- P3: Liveness:
+--     From every reachable state, it is always possible to eventually reach CLEAR.
 CTLSPEC
     AG ( EF adv = CLEAR );
 

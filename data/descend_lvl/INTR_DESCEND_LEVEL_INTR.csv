@@ -1,2 +1,2 @@
 time_s,aircraft_id,df,icao24,mode,altitude_ft,vertical_rate_fpm,on_ground,tcas_equipped,identity,squawk,range_nm,bearing_deg,range_rate_kt
-0,INTR_DESCEND_LEVEL_INTR,17,DES222,S,17000,0,0,1,INTRD,7501,8,10,-400
+0,INTR_DESCEND_LEVEL_INTR,17,DES222,S,17000,0,0,1,INTRD,7501,8,10,-300

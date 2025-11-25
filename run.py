@@ -37,7 +37,7 @@ def main():
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("consolas,menlo,monospace", 16)
 
-    # ---- Initial load: either ADS-B ownship+folder, or single CSV, or scenario ----
+        # ---- Initial load: either ADS-B ownship+folder, or single CSV, or scenario ----
     if args.input:
         try:
             if args.ownship and os.path.isdir(args.input):
@@ -55,7 +55,49 @@ def main():
     else:
         ac = load_scenario(args.scenario)
 
-    world = World(ac)
+    # ------------------------------------------------------------
+    # DETECT SCENARIOS & APPLY BIAS (bad altitude or bad VS)
+    # ------------------------------------------------------------
+
+    import random
+
+    scenario_name = None
+
+    for cs, aircraft in ac.items():
+
+        # -------- Bad altitude scenario --------
+        if cs == "INTR_BADALT":
+            scenario_name = "INTR_BADALT"
+
+            # Save TRUE altitude
+            aircraft.true_alt_ft = aircraft.alt_ft
+
+            # Random altitude bias (positive or negative)
+            bias_ft = random.uniform(-800.0, 800.0)
+            aircraft.alt_ft = aircraft.alt_ft + bias_ft
+            aircraft.alt_ft += aircraft.alt_bias_ft
+            print(f"[BAD ALT] {cs}: bias={bias_ft:.1f} ft "
+                  f"(true={aircraft.true_alt_ft:.1f}, sensed={aircraft.alt_ft:.1f})")
+
+        # -------- Bad vertical speed scenario --------
+        if cs == "INTR_BADVS":
+            scenario_name = "INTR_BADVS"
+
+            # Save TRUE climb rate
+            aircraft.true_climb_fps = aircraft.climb_fps
+
+            # Random climb bias (ft/s), ±10 ft/s = ±600 fpm
+            bias_fps = random.uniform(-20.0, 20.0)
+            aircraft.climb_fps = aircraft.climb_fps + bias_fps
+            aircraft.climb_fps += aircraft.climb_bias_fps
+            print(f"[BAD VS] {cs}: bias={bias_fps:.2f} ft/s "
+                  f"(true={aircraft.true_climb_fps:.2f}, sensed={aircraft.climb_fps:.2f})")
+
+    # ------------------------------------------------------------
+    # Create world with scenario name
+    # ------------------------------------------------------------
+    world = World(ac, scenario_name=scenario_name)
+
 
     # UI state
     selected_idx = 0

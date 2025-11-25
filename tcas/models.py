@@ -8,19 +8,24 @@ class AdvisoryType(Enum):
     TA = auto()
 
     # Basic RAs
-    RA_CLIMB = auto()           
-    RA_DESCEND = auto()         
-    RA_MAINTAIN = auto()        
+    RA_CLIMB = auto()
+    RA_DESCEND = auto()
+    RA_MAINTAIN = auto()
 
     # Strengthened / weakened RAs
-    RA_INCREASE_CLIMB = auto()   
-    RA_INCREASE_DESCEND = auto() 
-    RA_REDUCE_CLIMB = auto()     
-    RA_REDUCE_DESCEND = auto()   
+    RA_INCREASE_CLIMB = auto()
+    RA_INCREASE_DESCEND = auto()
+    RA_REDUCE_CLIMB = auto()
+    RA_REDUCE_DESCEND = auto()
 
     # Altitude-crossing RAs
-    RA_CROSSING_CLIMB = auto()   
-    RA_CROSSING_DESCEND = auto() 
+    RA_CROSSING_CLIMB = auto()
+    RA_CROSSING_DESCEND = auto()
+
+    # Preventive RAs (negative / preventive per Table 3)
+    RA_DO_NOT_CLIMB = auto()
+    RA_DO_NOT_DESCEND = auto()
+
 
 
 @dataclass
@@ -49,6 +54,11 @@ class Aircraft:
     identity: Optional[str] = None
     on_ground: bool = False             # from CSV on_ground=0/1
     tcas_equipped: bool = True          # whether the aircraft has TCAS-II
+    
+    true_alt_ft: Optional[float] = None
+    true_climb_fps: Optional[float] = None
+    alt_bias_ft: float = 0.0          # +ve = alt_ft too high
+    climb_bias_fps: float = 0.0       # +ve = climb_fps too high
 
     # -------------------------------
     # Manual control / UI
