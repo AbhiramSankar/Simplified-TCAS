@@ -3,56 +3,116 @@ Simplified TCAS II Simulation
 
 Overview
 ------------------------------------------------------------
-This project implements a Simplified Traffic Collision Avoidance System (TCAS II)
-using Python and Pygame. It simulates real-time aircraft encounters, computing
-Traffic Advisories (TA) and Resolution Advisories (RA) based on relative motion,
-altitude, and time to closest approach.
+This project implements a software-based approximation of **TCAS II, Version 7.1**, including
+Traffic Advisories (TA), Resolution Advisories (RA), strengthened RAs, preventive guidance,
+reversals, RA maintain logic, and safety inhibition rules. The system models aircraft encounters
+in real time, visualizes TCAS symbology, and supports controlled fault injection to evaluate
+resilience to degraded sensor inputs. A complementary **NuSMV formal verification model**
+exhaustively checks key advisory safety properties.
 
-The simulation visualizes TCAS symbology (diamonds, circles, squares) and altitude
-tags on a radar-like display, with a side panel showing advisories, control inputs,
-and ownship altitude.
+Although simplified, the implementation follows published TCAS II v7.1 thresholds and logic
+structures documented by the FAA.
 
 ------------------------------------------------------------
 Features
 ------------------------------------------------------------
-- Real-time TCAS logic (TA, RA, and CLEAR states) with automatic reset.
-- Radar visualization with TCAS II symbols:
-  * Unfilled diamond – Other traffic
-  * Filled diamond – Proximate traffic
-  * Amber circle – Traffic Advisory (TA)
-  * Red square – Resolution Advisory (RA)
-- CSV-based flight data input or built-in scenario mode.
-- Manual control override (pilot climb/descend inputs).
-- Dynamic side HUD with controls and aircraft status.
-- Automatic removal of off-radar contacts.
+### **Core TCAS II (v7.1) Advisory Logic**
+- Sensitivity Level (SL) selection by ownship altitude.
+- TA and RA evaluation using:
+  - Tau thresholds (τ_RA, τ_TA)
+  - DMOD (horizontal miss distance threshold)
+  - ZTHR (vertical miss distance threshold)
+  - ALIM (minimum required vertical separation for RA)
+- Corrective RAs: Climb, Descend, Crossing Climb/Descend.
+- Strengthened RAs: Increase Climb/Descent.
+- Negative / Reduce RAs: Level Off.
+- Preventive RAs: Do Not Climb / Do Not Descend / Maintain Vertical Speed.
+- Reversal RAs: “Climb, climb NOW” / “Descend, descend NOW”.
+- Maintain RA logic when leaving RA but still within TA envelope.
+- HMD filtering to suppress TAs/RAs when lateral miss distance is large.
+- RA inhibition below low-altitude thresholds (<1000 ft AGL).
+
+### **Multi-Aircraft Coordination (Simplified)**
+- Intruders select complementary RA senses (up vs. down) when both are TCAS-equipped.
+- Basic coordination logic prevents conflicting vertical advisories.
+
+### **Sensing and Fault Injection**
+- True aircraft motion remains correct; only sensed values are corrupted.
+- Supports:
+  - **Bad altitude bias** (positive or negative)
+  - **Bad vertical-speed bias**
+  - **No-TCAS intruder** (non-cooperative)
+- Logs include both true and sensed geometry to evaluate correctness.
+
+### **Visualization**
+- Radar-style Pygame display with TCAS symbols:
+  - Open diamond – other traffic  
+  - Filled diamond – proximate traffic  
+  - Amber circle – TA  
+  - Red square – RA  
+- Dynamic HUD showing:
+  - Advisory text and aural phrasing  
+  - Ownship altitude and vertical speed  
+  - Current RA mode and strengthening state  
+
+### **Scenario Framework**
+Includes **16 predefined scenarios**, grouped into:
+- Baseline encounters (head-on, crossing, overtake, parallel)
+- Advisory behavior cases (strengthening, immediate RA, descend vs. level, high vertical separation)
+- Multi-aircraft and coordinated encounters (multi-threat, two-opposite, parity)
+- Edge-case geometry (NMAC-edge)
+- Fault-injected and RA-inhibited scenarios (Bad Altitude, Bad VS, Low Altitude, No-TCAS)
+
+Each scenario comes with a generated CSV log for post-run analysis.
+
+### **Formal Verification (NuSMV)**
+A dedicated abstract TCAS model evaluates:
+- RA inhibition below minimum altitude
+- RA suppression when HMD is large
+- Advisory stability (hysteresis)
+- Eventual reachability of CLEAR state
+- Partial coordination correctness
+
+This ensures coverage of encounter conditions not easily captured through simulation alone.
 
 ------------------------------------------------------------
 Project Structure
 ------------------------------------------------------------
 ```bash
 tcas_sim/
-├─ run.py                 : Entry point
-├─ config.py              : Global configuration
+├─ run.py # Main entry point
+├─ analysis.py # Log post-processing tools
+├─ config.py # Thresholds and runtime parameters
 │
-├─ tcas/                  : Core TCAS logic
-│  ├─ advisory.py         : Advisory decision logic
-│  ├─ threat.py           : Threat classification and TA/RA logic
-│  ├─ tracking.py         : Relative motion and closure rate computation
-│  ├─ sensing.py          : Simplified sensing snapshot
-│  ├─ math_utils.py       : Helper math functions
-│  ├─ models.py           : Data models (Aircraft, Advisory types)
-│  ├─ io.py               : CSV I/O utilities
-│  └─ bus.py              : Event bus
+├─ tcas/ # Core TCAS logic
+│ ├─ advisory.py # Advisory state machine + RA/TA selection
+│ ├─ threat.py # TA/RA envelope evaluation (Tau, DMOD, ZTHR, ALIM)
+│ ├─ tracking.py # Relative motion, CPA, closure rate
+│ ├─ sensing.py # Sensed-value snapshot (fault injection)
+│ ├─ models.py # Advisory types, aircraft model
+│ ├─ math_utils.py # Kinematic helpers
+│ ├─ io.py # CSV import/export
+│ └─ bus.py # Event distribution
 │
-├─ simulation/            : Simulation control
-│  ├─ world.py            : Manages aircraft states and steps
-│  └─ scenarios.py        : Built-in demo scenarios
+├─ sim/
+│ ├─ world.py # Manages aircraft states and time stepping
+│ └─ scenarios.py # Definitions for the 16 test encounters
 │
-└─ viz/                   : Visualization (Pygame)
-   ├─ radar_display.py    : Radar drawing logic
-   ├─ hud.py              : Side panel with controls and advisories
-   ├─ colors.py           : Common color definitions
-   └─ pygame_app.py       : Pygame rendering loop
+├─ viz/ # Pygame visualization
+│ ├─ radar_display.py
+│ ├─ hud.py
+│ ├─ colors.py
+│ └─ pygame_app.py
+│
+├─ formal_model/
+│ └─ tcas.smv # Abstract TCAS model for model checking
+│
+└─ data/
+├─ OWN_.csv # Ownship data for scenarios
+├─ scennario/
+│ └─ INT_.csv # Intruder data for scenarios
+└─ data/
+ └─ tcas_log_*.csv # Logged advisory outputs
 ```
 
 ------------------------------------------------------------
@@ -84,24 +144,15 @@ Running the Simulation
 
 Option 1 - Using a CSV Input File:
 ----------------------------------
-Prepare a CSV file (example: data/sample_flightplan.csv):
+Prepare a CSV file for ownship and intruder (example: data/OWN.csv):
 ```bash
-callsign,x_m,y_m,vel_x_mps,vel_y_mps,alt_ft,climb_fps,color_r,color_g,color_b
-OWN001,0,0,150,0,10000,0,255,255,255
-INT001,10000,0,-150,0,10500,-10,255,180,0
-INT002,-8000,-5000,140,70,11800,-5,255,255,255
+time_s,aircraft_id,df,icao24,mode,altitude_ft,vertical_rate_fpm,on_ground,tcas_equipped,identity,squawk,range_nm,bearing_deg,range_rate_kt
+0,OWN_NOTCAS,17,ABC138,S,15000,0,0,1,OWN_NOTCAS,7000,0,0,0
 ```
 
 Run:
 ```bash
-   python run.py --input data/sample_flightplan.csv
-```
-
-Option 2 - Using Built-in Scenarios:
-------------------------------------
-```bash
-   python run.py
-   Press 1, 2, or 3 to load predefined encounters (Head-On, Crossing, Overtake).
+  python run.py --ownship data/OWN001.csv --input data/scenario/
 ```
 
 ------------------------------------------------------------
@@ -127,9 +178,11 @@ Left Side - TCAS Radar:
 - Altitude tags in hundreds of feet (+10↑, -08↓).
 
 Right Side - HUD Panel:
-- Time, selected aircraft, override mode.
-- Active advisories and commands.
-- Ownship altitude at bottom.
+- Advisory type (TA/RA/CLEAR)
+- RA subtype (strengthened, reversal, preventive)
+- Aural annunciation text
+- Ownship state and vertical speed
+- Fault indicators (bad altitude, bad VS, no-TCAS)
 
 ------------------------------------------------------------
 How It Works
@@ -146,7 +199,9 @@ Requirements
 ------------------------------------------------------------
 - Python 3.8 or higher
 - Pygame 2.5 or higher
-- Numpy (optional)
+- pyttsx3 2.91
+- pytest
+- hypothesis
 
 ------------------------------------------------------------
 Notes
