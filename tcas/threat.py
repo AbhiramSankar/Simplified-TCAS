@@ -5,31 +5,51 @@ import config
 
 CROSSING_ALT_FT = 250.0
 
+
 def closing_tau_and_dcpA(rel_pos_m: Tuple[float, float],
                          rel_vel_mps: Tuple[float, float]) -> Tuple[float, float]:
     v2 = dot(rel_vel_mps, rel_vel_mps)
     if v2 <= 1e-6:
-        return float('inf'), norm(rel_pos_m)
-    tau = - dot(rel_pos_m, rel_vel_mps) / v2
-    d_cpa = norm((rel_pos_m[0] + (rel_vel_mps[0] * tau),
-                  rel_pos_m[1] + (rel_vel_mps[1] * tau)))
+        return float("inf"), norm(rel_pos_m)
+    tau = -dot(rel_pos_m, rel_vel_mps) / v2
+    d_cpa = norm(
+        (
+            rel_pos_m[0] + (rel_vel_mps[0] * tau),
+            rel_pos_m[1] + (rel_vel_mps[1] * tau),
+        )
+    )
     return tau, d_cpa
 
 
-def classify_contact(own_alt_ft,
-                     rel_pos_m,
-                     rel_vel_mps,
-                     rel_alt_ft,
-                     prev_state=None):
+def classify_contact(
+    own_alt_ft,
+    rel_pos_m,
+    rel_vel_mps,
+    rel_alt_ft,
+    rel_climb_fps,
+    prev_state=None,
+):
     """
     Classify a single intruder contact into CLEAR / TA / RA_* states.
 
-    Now includes *preventive* RAs (RA_DO_NOT_CLIMB / RA_DO_NOT_DESCEND) for
-    "milder" conflicts: cases that are inside the RA envelope but with
-    relatively large tau and moderate vertical separation, where a full
-    corrective CLIMB/DESCEND is not yet required.
+    Includes:
+      - TA envelope (tau / DMOD / ZTHR)
+      - RA envelope (tau / DMOD / ZTHR / ALIM)
+      - Low-altitude RA inhibition and HMD filtering
+      - Preventive RAs (RA_DO_NOT_CLIMB / RA_DO_NOT_DESCEND)
+      - RA hysteresis and RA_MAINTAIN
     """
     tau, d_cpa = closing_tau_and_dcpA(rel_pos_m, rel_vel_mps)
+
+    # Relative vertical speed
+    rel_vs_fps = rel_climb_fps              # ft/s
+    rel_vs_fpm = rel_vs_fps * 60.0          # ft/min
+
+    if abs(rel_vs_fpm) > 1e-3:
+        # vertical tau in seconds: |Δh| / |v_rel| (ft / (ft/min)) * 60
+        vert_tau = abs(rel_alt_ft) / abs(rel_vs_fpm) * 60.0
+    else:
+        vert_tau = float("inf")
 
     # ---- Outer CLEAR gate (very loose) ----
     CLEAR_RANGE_M = 1852 * 13  # ~13 NM
@@ -45,28 +65,51 @@ def classify_contact(own_alt_ft,
     ground = own_alt_ft <= config.GROUND_ALT_FT
     low_alt_total_inhibit = own_alt_ft <= config.RA_TOTAL_INHIBIT_ALT_FT
 
-    # ---- Sensitivity Level thresholds (tau / DMOD / ZTHR) ----
+    # ---- Sensitivity Level thresholds (tau / DMOD / ZTHR / ALIM) ----
     th = config.get_sl_thresholds(own_alt_ft)
-    ta_tau   = th["ta_tau"]
-    ra_tau   = th["ra_tau"]
-    ta_dmod  = th["ta_dmod_m"]
-    ra_dmod  = th["ra_dmod_m"]
-    ta_zthr  = th["ta_zthr_ft"]
-    ra_zthr  = th["ra_zthr_ft"]
+    ta_tau = th["ta_tau"]
+    ra_tau = th["ra_tau"]
+    ta_dmod = th["ta_dmod_m"]
+    ra_dmod = th["ra_dmod_m"]
+    ta_zthr = th["ta_zthr_ft"]
+    ra_zthr = th["ra_zthr_ft"]
+    ra_alim = th.get("ra_alim_ft")  # may be None at SLs without RA/ALIM
 
     # ---- TA envelope ----
-    is_ta = (
-        (ta_tau is not None and tau < ta_tau) and
-        (ta_dmod is not None and d_cpa < ta_dmod) and
-        abs(rel_alt_ft) < ta_zthr
+    range_ok_ta = (ta_tau is not None and tau <= ta_tau) or (
+        ta_dmod is not None and d_cpa <= ta_dmod
     )
+
+    vert_ok_ta = (ta_tau is not None and vert_tau <= ta_tau) or (
+        abs(rel_alt_ft) <= ta_zthr
+    )
+
+    is_ta = range_ok_ta and vert_ok_ta
+
+    # ---- ALIM-based predicted vertical miss ----
+    predicted_miss_ft = None
+    if ra_tau is not None and ra_alim is not None:
+        # Linear prediction: Δh(t) = Δh(0) + v_rel * t
+        predicted = rel_alt_ft + rel_vs_fps * ra_tau
+        predicted_miss_ft = abs(predicted)
 
     # ---- RA envelope (before HMD, before low-alt inhibit) ----
     if ra_tau is not None and ra_dmod is not None and ra_zthr is not None:
-        base_is_ra = (
-            (tau < ra_tau or d_cpa < ra_dmod) and
-            abs(rel_alt_ft) < ra_zthr
+        range_ok_ra = (tau <= ra_tau) or (d_cpa <= ra_dmod)
+
+        alim_violation = (
+            predicted_miss_ft is not None
+            and ra_alim is not None
+            and predicted_miss_ft < ra_alim
         )
+
+        vert_ok_ra = (
+            (vert_tau <= ra_tau)
+            or (abs(rel_alt_ft) <= ra_zthr)
+            or alim_violation
+        )
+
+        base_is_ra = range_ok_ra and vert_ok_ra
     else:
         base_is_ra = False  # RA inhibited at this SL
 
@@ -80,7 +123,9 @@ def classify_contact(own_alt_ft,
     is_ra = base_is_ra and hmd_allows_ra
 
     # Helper: are we currently in ANY RA?
-    prev_is_ra = isinstance(prev_state, M.AdvisoryType) and prev_state.name.startswith("RA_")
+    prev_is_ra = isinstance(prev_state, M.AdvisoryType) and prev_state.name.startswith(
+        "RA_"
+    )
 
     # ------------------------------------------------------------------
     # Helper to choose a "base" RA sense from geometry (CLIMB/DESC/CROSS)
@@ -124,7 +169,10 @@ def classify_contact(own_alt_ft,
     if prev_is_ra:
         # Immediate termination when entering low-altitude / ground region
         if low_alt_total_inhibit or ground:
-            return (M.AdvisoryType.CLEAR, "Clear (RA inhibited at low altitude/ground)")
+            return (
+                M.AdvisoryType.CLEAR,
+                "Clear (RA inhibited at low altitude/ground)",
+            )
 
         # Still inside RA envelope and HMD allows RA → refine RA subtype
         if hmd_allows_ra and base_is_ra:

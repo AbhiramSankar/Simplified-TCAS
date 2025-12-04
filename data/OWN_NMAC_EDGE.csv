@@ -1,2 +1,2 @@
 time_s,aircraft_id,df,icao24,mode,altitude_ft,vertical_rate_fpm,on_ground,tcas_equipped,identity,squawk,range_nm,bearing_deg,range_rate_kt
-0,OWN_NMAC_EDGE,17,NMC111,S,25000,0,0,1,OWNN,8400,0,0,0
+0,OWN_NMAC_EDGE,17,ABC134,S,15000,0,0,1,OWN_NMAC_EDGE,7000,0,0,0

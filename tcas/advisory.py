@@ -96,12 +96,13 @@ class AdvisoryLogic:
         ra_threats: List[dict] = []
         ta_threats: List[dict] = []
 
-        for cs, (rel_pos, rel_vel, rel_alt) in rels.items():
+        for cs, (rel_pos, rel_vel, rel_alt, rel_climb_fps) in rels.items():
             kind, reason = classify_contact(
                 own.alt_ft,
                 rel_pos,
                 rel_vel,
                 rel_alt,
+                rel_climb_fps,
                 prev_state=own.advisory.kind,
             )
             tau, d_cpa = closing_tau_and_dcpA(rel_pos, rel_vel)

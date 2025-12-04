@@ -16,6 +16,8 @@ class Tracking:
                 rel_pos = (oth.pos_m[0] - own.pos_m[0], oth.pos_m[1] - own.pos_m[1])
                 rel_vel = (oth.vel_mps[0] - own.vel_mps[0], oth.vel_mps[1] - own.vel_mps[1])
                 rel_alt = oth.alt_ft - own.alt_ft
-                rels[oth_cs] = (rel_pos, rel_vel, rel_alt)
+                rel_climb_fps = oth.climb_fps - own.climb_fps
+
+                rels[oth_cs] = (rel_pos, rel_vel, rel_alt, rel_climb_fps)
             tracks[own_cs] = rels
         return tracks

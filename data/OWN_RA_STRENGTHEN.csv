@@ -1,2 +1,2 @@
 time_s,aircraft_id,df,icao24,mode,altitude_ft,vertical_rate_fpm,on_ground,tcas_equipped,identity,squawk,range_nm,bearing_deg,range_rate_kt
-0,OWN_RA_STRENGTHEN,17,GRA555,S,31000,0,0,1,OWNS,7400,0,0,0
+0,OWN_RA_STRENGTH,17,ABC127,S,15000,0,0,1,OWN_RA_STRENGTH,7000,0,0,0

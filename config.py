@@ -26,21 +26,25 @@ RA_DEADBAND_FT = 200.0
 
 # ---------------------------------------------------------------------
 # TCAS II–inspired Sensitivity Levels (Table 2, TCAS II v7.1 booklet)
-# Each row: (alt_min_ft, alt_max_ft, SL, TA_tau_s, RA_tau_s,
-#            TA_DMOD_nm, RA_DMOD_nm, TA_ZTHR_ft, RA_ZTHR_ft)
-# RA thresholds can be None where RAs are inhibited (e.g., SL2).
+# Each row:
+# (alt_min_ft, alt_max_ft, SL,
+#  TA_tau_s, RA_tau_s,
+#  TA_DMOD_nm, RA_DMOD_nm,
+#  TA_ZTHR_ft, RA_ZTHR_ft,
+#  RA_ALIM_ft)   # NEW
 # ---------------------------------------------------------------------
 
 SENSITIVITY_LEVELS = [
-    # alt_min, alt_max, SL, TA_tau, RA_tau, TA_DMOD, RA_DMOD, TA_ZTHR, RA_ZTHR
-    (0,      1000,   2,  20.0, None,  0.30, None,  850,  None),  # TA-only, RA inhibited
-    (1000,   2350,   3,  25.0, 15.0,  0.33, 0.20,  850,  600),
-    (2350,   5000,   4,  30.0, 20.0,  0.48, 0.35,  850,  600),
-    (5000,   10000,  5,  40.0, 25.0,  0.75, 0.55,  850,  600),
-    (10000,  20000,  6,  45.0, 30.0,  1.00, 0.80,  850,  600),
-    (20000,  42000,  7,  48.0, 35.0,  1.30, 1.10,  850,  700),
-    (42000,  999999, 7,  48.0, 35.0,  1.30, 1.10, 1200,  800),
+    # alt_min, alt_max, SL, TA_tau, RA_tau, TA_DMOD, RA_DMOD, TA_ZTHR, RA_ZTHR, RA_ALIM
+    (0,      1000,   2,  20.0, None,  0.30, None,  850,  None,  None),  # TA-only, RA inhibited
+    (1000,   2350,   3,  25.0, 15.0,  0.33, 0.20,  850,  600,   300),
+    (2350,   5000,   4,  30.0, 20.0,  0.48, 0.35,  850,  600,   300),
+    (5000,   10000,  5,  40.0, 25.0,  0.75, 0.55,  850,  600,   350),
+    (10000,  20000,  6,  45.0, 30.0,  1.00, 0.80,  850,  600,   400),
+    (20000,  42000,  7,  48.0, 35.0,  1.30, 1.10,  850,  700,   600),
+    (42000,  999999, 7,  48.0, 35.0,  1.30, 1.10, 1200,  800,   700),
 ]
+
 
 NM_TO_M = 1852.0
 
@@ -51,6 +55,7 @@ def get_sl_thresholds(own_alt_ft: float):
         ta_tau, ra_tau,
         ta_dmod_nm, ra_dmod_nm,
         ta_zthr_ft, ra_zthr_ft,
+        ra_alim_ft,                      # NEW
     ) in SENSITIVITY_LEVELS:
         if amin <= own_alt_ft < amax:
             return {
@@ -61,6 +66,7 @@ def get_sl_thresholds(own_alt_ft: float):
                 "ra_dmod_m": ra_dmod_nm * NM_TO_M if ra_dmod_nm is not None else None,
                 "ta_zthr_ft": ta_zthr_ft,
                 "ra_zthr_ft": ra_zthr_ft,
+                "ra_alim_ft": ra_alim_ft,   # NEW
             }
 
     # Fallback: use legacy fixed thresholds
@@ -72,8 +78,8 @@ def get_sl_thresholds(own_alt_ft: float):
         "ra_dmod_m": RA_HORZ_M,
         "ta_zthr_ft": TA_VERT_FT,
         "ra_zthr_ft": RA_VERT_FT,
+        "ra_alim_ft": None,                # NEW
     }
-
 
 # ---------------------------------------------------------------------
 # Horizontal Miss Distance (HMD) filter for RA:

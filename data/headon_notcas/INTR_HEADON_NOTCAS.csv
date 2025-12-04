@@ -1,2 +1,2 @@
 time_s,aircraft_id,df,icao24,mode,altitude_ft,vertical_rate_fpm,on_ground,tcas_equipped,identity,squawk,range_nm,bearing_deg,range_rate_kt
-0,INTR_HEADON_NOTCAS,17,DFN456,S,13000,-1500,0,0,INNC,7701,12,180,-500
+0,INTR_NOTCAS,17,J11AAA,S,15500,-500,0,0,INTR_NOTCAS,7200,7,180,-400

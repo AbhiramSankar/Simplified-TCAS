@@ -1,2 +1,2 @@
 time_s,aircraft_id,df,icao24,mode,altitude_ft,vertical_rate_fpm,on_ground,tcas_equipped,identity,squawk,range_nm,bearing_deg,range_rate_kt
-0,OWN_MULTI3,17,MUL000,S,20000,0,0,1,OWNM,7600,0,0,0
+0,OWN_MULTI_THREAT,17,ABC131,S,15000,0,0,1,OWN_MULTI_THREAT,7000,0,0,0

@@ -69,7 +69,6 @@ if hasattr(AdvisoryType, "RA_DO_NOT_CLIMB") and hasattr(AdvisoryType, "RA_DO_NOT
     RA_FLIP_MAP[AdvisoryType.RA_DO_NOT_DESCEND] = AdvisoryType.RA_DO_NOT_CLIMB
 
 
-
 class World:
     def __init__(self, aircraft: Dict[str, Aircraft], log_path: str | None = "logs/tcas_log.csv", scenario_name=None) -> None:
         
@@ -144,7 +143,6 @@ class World:
                 "intr_climb_true_fps",
             ])
 
-
     def step(self, dt: float) -> None:
         if self.paused:
             return
@@ -175,7 +173,7 @@ class World:
 
             # Logging + NMAC metrics per intruder
             if self.log_writer is not None:
-                for intr_id, (rel_pos, rel_vel, rel_alt_ft) in rels.items():
+                for intr_id, (rel_pos, rel_vel, rel_alt_ft, rel_climb_fps) in rels.items():
                     # biased values (what TCAS uses)
                     own = self.ac[own_id]
                     intr = self.ac[intr_id]
@@ -233,7 +231,6 @@ class World:
                         f"{intr_climb_sensed:.2f}",
                         f"{intr_climb_true:.2f}",
                     ])
-
 
         self.time_s += dt
 

@@ -1,2 +1,2 @@
 time_s,aircraft_id,df,icao24,mode,altitude_ft,vertical_rate_fpm,on_ground,tcas_equipped,identity,squawk,range_nm,bearing_deg,range_rate_kt
-0,OWN_HEADON,17,ABC123,S,10000,1500,0,1,OWN1,7000,0,0,0
+0,OWN_NOTCAS,17,ABC138,S,15000,0,0,1,OWN_NOTCAS,7000,0,0,0

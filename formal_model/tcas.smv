@@ -7,52 +7,83 @@
 --     - RA envelope (ra_env)
 --     - RA hysteresis via prev_adv (in transition logic)
 --     - Low-altitude RA inhibition (low_alt)
---     - HMD (Horizontal Miss Distance) filter (hmd_large)
+--     - HMD (Horizontal Miss Distance) filter (hmd_large) – RA-only
 --     - Preventive RAs (RA_DO_NOT_CLIMB / RA_DO_NOT_DESCEND)
 --     - Maintain RA when RA envelope ends but TA still holds (RA_MAINTAIN)
 --
 --  Environment predicates (ta_env, ra_env, low_alt, hmd_large)
---  are nondeterministic abstractions of continuous geometry.
+--  are nondeterministic abstractions of continuous geometry
+--  and numeric envelopes (tau/DMOD + vertical tau/ZTHR).
+--
+--  The model focuses on discrete modal behaviour:
+--    - CLEAR
+--    - TA
+--    - Corrective RAs: RA_CLIMB, RA_DESCEND
+--    - Preventive RAs: RA_DO_NOT_CLIMB, RA_DO_NOT_DESCEND
+--    - Maintain RA: RA_MAINTAIN
+--
+--  Properties (informal):
+--    P1: No RA below low-altitude inhibit band.
+--    P2: HMD can suppress RA or clear RA, but never force RA.
+--    P3: Eventually CLEAR is always reachable (no deadlock in RA).
 -----------------------------------------------------------------------------
 
 MODULE main
 
     VAR
         ---------------------------------------------------------------------
-        -- Current advisory and previous advisory
+        -- Advisory state for "ownship":
+        --  adv      : current advisory
+        --  prev_adv : previous advisory (to model hysteresis)
         ---------------------------------------------------------------------
-        adv      : {CLEAR, TA,
-                    RA_CLIMB, RA_DESCEND,
+        adv      : {CLEAR,
+                    TA,
+                    RA_CLIMB,
+                    RA_DESCEND,
                     RA_MAINTAIN,
-                    RA_DO_NOT_CLIMB, RA_DO_NOT_DESCEND};
+                    RA_DO_NOT_CLIMB,
+                    RA_DO_NOT_DESCEND};
 
-        prev_adv : {CLEAR, TA,
-                    RA_CLIMB, RA_DESCEND,
+        prev_adv : {CLEAR,
+                    TA,
+                    RA_CLIMB,
+                    RA_DESCEND,
                     RA_MAINTAIN,
-                    RA_DO_NOT_CLIMB, RA_DO_NOT_DESCEND};
+                    RA_DO_NOT_CLIMB,
+                    RA_DO_NOT_DESCEND};
 
         ---------------------------------------------------------------------
-        -- Environment predicates (abstracted from continuous geometry)
+        -- Environment predicates (abstract inputs):
+        --
+        --  ta_env    : TRUE iff TA envelope is satisfied
+        --  ra_env    : TRUE iff RA envelope is satisfied
+        --  low_alt   : TRUE iff ownship is in RA inhibit band / on ground
+        --  hmd_large : TRUE iff Horizontal Miss Distance is large enough
+        --              to suppress RA (only RA, not TA)
         ---------------------------------------------------------------------
-        ta_env    : boolean;  -- TA envelope holds
-        ra_env    : boolean;  -- RA envelope holds
-        low_alt   : boolean;  -- below RA inhibit altitude / on ground
-        hmd_large : boolean;  -- HMD large enough to cancel RA
+        ta_env    : boolean;
+        ra_env    : boolean;
+        low_alt   : boolean;
+        hmd_large : boolean;
+
 
     ASSIGN
+
         ---------------------------------------------------------------------
-        -- Initial state: CLEAR, no envelopes active
+        -- Initial state: CLEAR, no previous advisory; environment arbitrary.
         ---------------------------------------------------------------------
         init(adv)      := CLEAR;
         init(prev_adv) := CLEAR;
 
-        init(ta_env)    := FALSE;
-        init(ra_env)    := FALSE;
-        init(low_alt)   := FALSE;
-        init(hmd_large) := FALSE;
-
         ---------------------------------------------------------------------
-        -- Environment evolution is nondeterministic
+        -- Environment variables are unconstrained (nondeterministic inputs).
+        -- In a more detailed model, these could be linked via assumptions
+        -- to tau/DMOD/ZTHR/ALIM and HMD geometry, but here we keep them as
+        -- abstract booleans aligned with the Python predicates:
+        --   - ta_env    ~ is_ta
+        --   - ra_env    ~ base_is_ra
+        --   - low_alt   ~ low_alt_total_inhibit or ground
+        --   - hmd_large ~ (d_cpa > HMD_RA_M)
         ---------------------------------------------------------------------
         next(ta_env)    := {TRUE, FALSE};
         next(ra_env)    := {TRUE, FALSE};
@@ -60,117 +91,172 @@ MODULE main
         next(hmd_large) := {TRUE, FALSE};
 
         ---------------------------------------------------------------------
-        -- Previous advisory tracks adv with 1-step delay
+        -- prev_adv = adv from previous step (simple memory variable).
         ---------------------------------------------------------------------
-        next(prev_adv) :=
-            case
-                -- If HMD OR low_alt occurs now, force prev_adv = CLEAR
-                hmd_large = TRUE : CLEAR;
-                low_alt   = TRUE : CLEAR;
-
-                TRUE : adv;
-            esac;
+        next(prev_adv) := adv;
 
         ---------------------------------------------------------------------
-        -- TCAS Advisory Logic (Finite-State Abstraction)
+        -- Transition relation for adv:
+        --  Mirrors the structure of classify_contact(...) in threat.py.
         --
-        -- Priority:
-        --   1) Low-altitude inhibit
-        --   2) HMD filter
-        --   3) RA hysteresis (keep RA in TA-only region as RA_MAINTAIN)
-        --   4) New RA if ra_env (preventive vs corrective)
-        --   5) TA if ta_env
-        --   6) CLEAR otherwise
+        --  High-level outline:
+        --    1) If low_alt is TRUE:
+        --          - If ta_env → TA
+        --          - Else      → CLEAR
+        --       (RA is totally inhibited.)
+        --
+        --    2) If prev_adv was an RA_* and low_alt is FALSE:
+        --          - If hmd_large → CLEAR  (HMD cancels RA early)
+        --          - Else if ra_env → keep RA (or RA_MAINTAIN if only TA)
+        --          - Else if ta_env → RA_MAINTAIN
+        --          - Else → CLEAR
+        --
+        --    3) If no previous RA (prev_adv not RA_*) and low_alt is FALSE:
+        --          - If ra_env and not hmd_large:
+        --                If ta_env → preventive RA (Do Not Climb/Descend)
+        --                Else      → corrective RA (Climb/Descend)
+        --          - Else if ta_env → TA
+        --          - Else → CLEAR
         ---------------------------------------------------------------------
         next(adv) :=
             case
                 -----------------------------------------------------------------
-                -- 1) Low-altitude inhibit: no RA
+                -- 1) Low-altitude / ground inhibition:
+                --
+                --    Any time low_alt is TRUE, all RAs are suppressed:
+                --      - If TA envelope also holds, we allow TA.
+                --      - Otherwise, CLEAR.
+                --
+                --    This models "RA_TOTAL_INHIBIT_ALT_FT" and "GROUND_ALT_FT"
+                --    in the Python implementation.
                 -----------------------------------------------------------------
                 low_alt = TRUE :
-                case
-                    ta_env = TRUE : TA;
-                    TRUE          : CLEAR;
-                esac;
+                    case
+                        ta_env = TRUE : TA;
+                        TRUE          : CLEAR;
+                    esac;
 
                 -----------------------------------------------------------------
-                -- 2) HMD filter: whenever hmd_large is TRUE in this state,
-                --    the NEXT advisory MUST be CLEAR (no RA, no TA).
+                -- 2) RA hysteresis (only when we were in RA before and
+                --    no low_alt fired above).
+                --
+                --    prev_adv ∈ RA-set means previous cycle issued some RA_*.
+                --    Now:
+                --       - If HMD is large → clear RA (like hmd_allows_ra = False).
+                --       - Else if still in RA envelope → keep RA (refinement is abstracted).
+                --       - Else if only TA envelope holds → RA_MAINTAIN.
+                --       - Else → CLEAR.
                 -----------------------------------------------------------------
-                hmd_large = TRUE :
-                CLEAR;
+                prev_adv in {RA_CLIMB,
+                             RA_DESCEND,
+                             RA_MAINTAIN,
+                             RA_DO_NOT_CLIMB,
+                             RA_DO_NOT_DESCEND} :
+                    case
+                        -- HMD cancels RA early
+                        hmd_large = TRUE : CLEAR;
+
+                        -- Still inside RA envelope (base_is_ra) and HMD allows RA
+                        ra_env    = TRUE : prev_adv;
+
+                        -- RA envelope ended, but still in TA envelope → maintain RA
+                        ta_env = TRUE & ra_env = FALSE : RA_MAINTAIN;
+
+                        -- Neither RA nor TA → fully clear
+                        TRUE : CLEAR;
+                    esac;
 
                 -----------------------------------------------------------------
-                -- 3) RA hysteresis (only when we were in RA before and
-                --    no low_alt / hmd_large fired above)
+                -- 3) New RA if ra_env and not low_alt
+                --    HMD only suppresses RA; TA is handled separately below.
+                --
+                --    Simplified abstraction of Python logic:
+                --      - If ra_env AND hmd_large → no RA (fall through to TA/CLEAR).
+                --      - If ra_env AND ta_env → preventive RA (Do Not Climb/Descend).
+                --      - If ra_env AND !ta_env → full corrective RA (CLIMB/DESC).
                 -----------------------------------------------------------------
-                (prev_adv in {RA_CLIMB,
-                            RA_DESCEND,
-                            RA_MAINTAIN,
-                            RA_DO_NOT_CLIMB,
-                            RA_DO_NOT_DESCEND}) :
-                case
-                    ra_env = TRUE :
-                    prev_adv;
-                    ta_env = TRUE & ra_env = FALSE :
-                    RA_MAINTAIN;
-                    TRUE :
-                    CLEAR;
-                esac;
+                ra_env = TRUE & low_alt = FALSE :
+                    case
+                        -- HMD says lateral miss distance is large → RA suppressed
+                        hmd_large = TRUE : CLEAR;
+
+                        -- Preventive RA region (both TA and RA envelopes true)
+                        ta_env = TRUE :
+                            case
+                                -- Intruder above → Do Not Climb
+                                -- (Abstraction: we don't model sign(Δh); we just
+                                --  allow either preventive sense.)
+                                TRUE : {RA_DO_NOT_CLIMB, RA_DO_NOT_DESCEND};
+                            esac;
+
+                        -- Corrective RA region (RA envelope only)
+                        TRUE :
+                            case
+                                -- Again, we abstract away the geometric sign logic
+                                -- (CLIMB vs DESCEND) and allow either corrective RA.
+                                TRUE : {RA_CLIMB, RA_DESCEND};
+                            esac;
+                    esac;
 
                 -----------------------------------------------------------------
-                -- 4) New RA if ra_env (preventive vs corrective)
+                -- 4) TA-only region (no RA envelope, but TA envelope holds).
                 -----------------------------------------------------------------
-                ra_env = TRUE & low_alt = FALSE & hmd_large = FALSE :
-                case
-                    ta_env = TRUE : RA_DO_NOT_CLIMB;
-                    TRUE          : RA_CLIMB;
-                esac;
+                ta_env = TRUE & ra_env = FALSE & low_alt = FALSE :
+                    TA;
 
                 -----------------------------------------------------------------
-                -- 5) TA-only region
-                -----------------------------------------------------------------
-                ta_env = TRUE :
-                TA;
-
-                -----------------------------------------------------------------
-                -- 6) Otherwise CLEAR
+                -- 5) No TA, no RA envelope → CLEAR.
                 -----------------------------------------------------------------
                 TRUE :
-                CLEAR;
+                    CLEAR;
             esac;
 
 
----------------------------------------------
--- HELPER DEFINITIONS
 -----------------------------------------------------------------------------
+-- Derived predicates for convenience in CTL properties.
+-----------------------------------------------------------------------------
+
 DEFINE
-    -------------------------------------------------------------------------
-    -- Any RA state: includes corrective, preventive, and maintain RAs.
-    -------------------------------------------------------------------------
-    ra_state := adv in {
-        RA_CLIMB,
-        RA_DESCEND,
-        RA_MAINTAIN,
-        RA_DO_NOT_CLIMB,
-        RA_DO_NOT_DESCEND
-    };
+
+    -- "ra_state" holds when adv is any RA_*.
+    ra_state :=
+        (adv in {RA_CLIMB,
+                 RA_DESCEND,
+                 RA_MAINTAIN,
+                 RA_DO_NOT_CLIMB,
+                 RA_DO_NOT_DESCEND});
+
+    -- "ta_state" holds when adv is TA.
+    ta_state := (adv = TA);
+
 
 -----------------------------------------------------------------------------
--- CTL PROPERTIES
---   P1: Low-altitude inhibits RA (next-step)
---   P2: HMD clears RA (next-step)
---   P3: Liveness: from every state, CLEAR is reachable.
+-- CTL Properties
 -----------------------------------------------------------------------------
 
--- P1: Low-altitude RA inhibition:
---     Once low_alt is true, the *next* decision cycle must not be RA.
+-- P1: Safety: No RA when low_alt is TRUE.
+--     i.e., whenever low_alt holds, adv must not be in an RA_* state.
 CTLSPEC
     AG ( low_alt -> AX !ra_state );
 
 
--- P2: HMD filter:
+-- P2: Safety: HMD can only suppress RA, never force it.
+--
+--     1) If HMD says miss distance is large (hmd_large = TRUE),
+--        there is no obligation to raise RA. (This is implicit,
+--        since hmd_large is an unconstrained input.)
+--
+--     2) More concretely: whenever hmd_large is TRUE, the *next*
+--        state must not be RA (this captures early RA termination).
+--
+--     Note: TA is allowed when hmd_large, just like in the Python
+--     model, where HMD filter is applied only to RA onset/termination.
+--
+--     Formally:
+--        AG ( hmd_large -> AX !ra_state )
+--
 --     Once hmd_large is true, the next cycle must not be RA.
+--     (TA is allowed, matching the Python HMD filter behaviour.)
 CTLSPEC
     AG ( hmd_large -> AX !ra_state );
 
